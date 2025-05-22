@@ -1,0 +1,146 @@
+我现在正在准备一个计算机视觉方面的实验，老师给我们的任务是进行目标检测。
+
+我找到了两个数据集，不知道能不能用。下面我将两个数据集的大概内容以及目录结构介绍一下，请你仔细分析。
+
+在根目录下，有一个data文件夹，在data文件夹下，有两个数据集文件，分别是：data\VOCtest_06-Nov-2007和data\VOCtrainval_06-Nov-2007
+
+对于data\VOCtrainval_06-Nov-2007下面有data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\Annotations、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\JPEGImages、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationClass、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationObject五个文件夹。
+对于data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\Annotations，下面有若干xml文件，如data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\Annotations\000005.xml：
+格式是：
+<annotation>
+	<folder>VOC2007</folder>
+	<filename>000005.jpg</filename>
+	<source>
+		<database>The VOC2007 Database</database>
+		<annotation>PASCAL VOC2007</annotation>
+		<image>flickr</image>
+		<flickrid>325991873</flickrid>
+	</source>
+	<owner>
+		<flickrid>archintent louisville</flickrid>
+		<name>?</name>
+	</owner>
+	<size>
+		<width>500</width>
+		<height>375</height>
+		<depth>3</depth>
+	</size>
+	<segmented>0</segmented>
+	<object>
+		<name>chair</name>
+		<pose>Rear</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>263</xmin>
+			<ymin>211</ymin>
+			<xmax>324</xmax>
+			<ymax>339</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>chair</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>165</xmin>
+			<ymin>264</ymin>
+			<xmax>253</xmax>
+			<ymax>372</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>chair</name>
+		<pose>Unspecified</pose>
+		<truncated>1</truncated>
+		<difficult>1</difficult>
+		<bndbox>
+			<xmin>5</xmin>
+			<ymin>244</ymin>
+			<xmax>67</xmax>
+			<ymax>374</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>chair</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>241</xmin>
+			<ymin>194</ymin>
+			<xmax>295</xmax>
+			<ymax>299</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>chair</name>
+		<pose>Unspecified</pose>
+		<truncated>1</truncated>
+		<difficult>1</difficult>
+		<bndbox>
+			<xmin>277</xmin>
+			<ymin>186</ymin>
+			<xmax>312</xmax>
+			<ymax>220</ymax>
+		</bndbox>
+	</object>
+</annotation>
+
+
+对于data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets，下面有三个文件夹，分别是data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Segmentation
+在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout有data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\train.txt，格式是000012
+000026
+000034
+000036
+在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\trainval.txt格式是：000005
+000007
+000012
+在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\val.txt，格式是：data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\val.txt。
+
+在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main有若干txt文件，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main\aeroplane_train.txt，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main\aeroplane_trainval.txt，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main\aeroplane_val.txt，每一个txt都是000012 -1
+000017 -1
+000023 -1
+类似的格式。
+
+
+在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\JPEGImages下面有若干张图片，是彩色的原图，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\JPEGImages\000005.jpg。
+
+data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationClass下面也是若干张png，突出了主题，背景是黑色的，有不同颜色的主体。，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationClass\000032.png
+
+data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationObject也是若干张png，北京也是黑色的，只不过有不同颜色的主体，物体和上面那个文件夹一样，不过颜色类别更多一些：data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationObject\000032.png
+
+另一个文件夹data\VOCtest_06-Nov-2007和上面这个文件夹差不多。
+
+
+请你仔细分析一下我的数据集的特点，然后帮我写一个实验的代码，使用效果很好的yolo技术进行实验。
+
+一定要确保指标要好，确保效果要好。脚本放在根目录下的yolo_code文件夹下面，可以分为多个独立的脚本进行。输出结果也要放在yolo_code下面的results下面。
+
+训练的时候，要尽可能的将训练过程的指标以及其他结果使用可视化图表可视化出来，包含各种各样的图片，越多越好。
+
+验证的时候，也要尽可能的将验证结果指标等可视化展示，越多越好，图表要高级，确保不会出现字体问题，使用simhei字体。
+
+结果要注意好类型的区分，不用的结果放在不同文件夹内。
+
+总之，尽可能多的可视化展示。
+
+另外，代码要根据数据集的特点以及目标检测的目的，尽可能好的优化实验的效果，提高准确率等指标
+
+代码也不要出现，仔细分析数据集，仔细检查。
+
+给我脚本的时候，告诉我脚本的相对路径。
+
+可以想给我一个实验各个步骤使用的技术，确保不会出错。
+
+
+还要有一个根据测试集进行测试的脚本。
+
+根据你的理解，好好设计实验，结果一定要好，
+
+
+根据上述要求，将完整的代码给我，确保效果非常好，并且可视化结果也要多。
+
+
+
