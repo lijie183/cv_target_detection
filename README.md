@@ -895,7 +895,6 @@ IOU_THRESH = 0.45
 USE_TTA = True  # Test-Time Augmentation
 
 
-# filepath: yolo_code/data_preparation.py
 import os
 import shutil
 import xml.etree.ElementTree as ET
@@ -910,6 +909,10 @@ import torchvision.transforms as transforms
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 import cv2
+import warnings
+
+# 忽略所有警告
+warnings.filterwarnings("ignore")
 
 from config import *
 
@@ -1018,7 +1021,8 @@ class VOCDataset(Dataset):
 def create_data_loaders():
     # 训练数据增强
     train_transform = A.Compose([
-        A.RandomResizedCrop(height=IMG_SIZE, width=IMG_SIZE, scale=(0.1, 1.0)),
+        # 使用size参数
+        A.RandomResizedCrop(size=(IMG_SIZE, IMG_SIZE), scale=(0.1, 1.0)),
         A.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1, p=0.5),
         A.HorizontalFlip(p=0.5),
         A.RandomRotate90(p=0.5),
@@ -1141,10 +1145,13 @@ def analyze_dataset():
     
     plt.bar(classes, counts, color='skyblue')
     plt.xticks(rotation=45, ha='right')
-    plt.xlabel('类别', fontproperties='SimHei', fontsize=12)
-    plt.ylabel('样本数量', fontproperties='SimHei', fontsize=12)
-    plt.title('VOC2007训练集中各类别样本分布', fontproperties='SimHei', fontsize=14)
+    plt.xlabel('类别', fontsize=12)
+    plt.ylabel('样本数量', fontsize=12)
+    plt.title('VOC2007训练集中各类别样本分布', fontsize=14)
     plt.tight_layout()
+    
+    # 确保目录存在
+    os.makedirs(VISUALIZATION_PATH, exist_ok=True)
     plt.savefig(str(VISUALIZATION_PATH / "class_distribution.png"))
     
     # 分析边界框大小分布
@@ -1177,32 +1184,177 @@ def analyze_dataset():
     # 绘制边界框面积直方图
     plt.figure(figsize=(10, 6))
     plt.hist(box_areas, bins=50, alpha=0.75, color='blue')
-    plt.xlabel('相对边界框面积', fontproperties='SimHei', fontsize=12)
-    plt.ylabel('数量', fontproperties='SimHei', fontsize=12)
-    plt.title('边界框相对面积分布', fontproperties='SimHei', fontsize=14)
+    plt.xlabel('相对边界框面积', fontsize=12)
+    plt.ylabel('数量', fontsize=12)
+    plt.title('边界框相对面积分布', fontsize=14)
     plt.tight_layout()
     plt.savefig(str(VISUALIZATION_PATH / "bbox_area_distribution.png"))
     
     # 绘制边界框宽高比直方图
     plt.figure(figsize=(10, 6))
     plt.hist(box_aspects, bins=50, alpha=0.75, color='green')
-    plt.xlabel('边界框宽高比', fontproperties='SimHei', fontsize=12)
-    plt.ylabel('数量', fontproperties='SimHei', fontsize=12)
-    plt.title('边界框宽高比分布', fontproperties='SimHei', fontsize=14)
+    plt.xlabel('边界框宽高比', fontsize=12)
+    plt.ylabel('数量', fontsize=12)
+    plt.title('边界框宽高比分布', fontsize=14)
     plt.tight_layout()
     plt.savefig(str(VISUALIZATION_PATH / "bbox_aspect_distribution.png"))
     
     print(f"分析完成，图表已保存到 {VISUALIZATION_PATH}")
 
+def visualize_augmented_samples(dataset, num_samples=10, save_dir=None):
+    """可视化数据增强样本"""
+    if save_dir is None:
+        save_dir = VISUALIZATION_PATH / "augmented_samples"
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    indices = np.random.choice(len(dataset), num_samples, replace=False)
+    
+    for i, idx in enumerate(indices):
+        img, target, img_id = dataset[idx]
+        
+        # 将tensor转换为numpy数组以便可视化
+        if isinstance(img, torch.Tensor):
+            img_np = img.permute(1, 2, 0).numpy()
+            # 去标准化
+            mean = np.array([0.485, 0.456, 0.406])
+            std = np.array([0.229, 0.224, 0.225])
+            img_np = std * img_np + mean
+            img_np = np.clip(img_np, 0, 1)
+        else:
+            img_np = img
+        
+        # 创建带有边界框的图像
+        plt.figure(figsize=(10, 10))
+        plt.imshow(img_np)
+        
+        # 绘制边界框
+        if 'boxes' in target and len(target['boxes']) > 0:
+            height, width = img_np.shape[:2]
+            boxes = target['boxes'].numpy()
+            labels = target['labels'].numpy()
+            
+            for box, label in zip(boxes, labels):
+                # YOLO格式: x_center, y_center, width, height
+                x_center, y_center, box_width, box_height = box
+                
+                # 计算左上角和右下角坐标
+                x1 = int((x_center - box_width / 2) * width)
+                y1 = int((y_center - box_height / 2) * height)
+                x2 = int((x_center + box_width / 2) * width)
+                y2 = int((y_center + box_height / 2) * height)
+                
+                # 绘制矩形框
+                rect = plt.Rectangle((x1, y1), x2 - x1, y2 - y1, 
+                                    fill=False, edgecolor='red', linewidth=2)
+                plt.gca().add_patch(rect)
+                
+                # 添加类别标签
+                class_name = VOC_CLASSES[label]
+                plt.text(x1, y1 - 5, class_name, color='white', 
+                        backgroundcolor='red', fontsize=10)
+        
+        plt.title(f"增强后的样本 - ID: {img_id}")
+        plt.axis('off')
+        plt.tight_layout()
+        plt.savefig(str(save_dir / f"augmented_{img_id}.png"))
+        plt.close()
+    
+    print(f"增强样本可视化已保存到: {save_dir}")
+
+def save_augmented_dataset(dataset, output_dir, num_samples=None):
+    """保存增强后的数据集到磁盘"""
+    # 创建输出目录
+    images_dir = Path(output_dir) / "images"
+    labels_dir = Path(output_dir) / "labels"
+    os.makedirs(images_dir, exist_ok=True)
+    os.makedirs(labels_dir, exist_ok=True)
+    
+    # 确定要处理的样本数量
+    if num_samples is None:
+        num_samples = len(dataset)
+    else:
+        num_samples = min(num_samples, len(dataset))
+        
+    # 创建进度条
+    pbar = tqdm(range(num_samples), desc="Saving augmented dataset")
+    
+    for idx in pbar:
+        img, target, img_id = dataset[idx]
+        
+        # 将tensor转换为PIL图像以保存
+        if isinstance(img, torch.Tensor):
+            img_np = img.permute(1, 2, 0).numpy()
+            # 去标准化
+            mean = np.array([0.485, 0.456, 0.406])
+            std = np.array([0.229, 0.224, 0.225])
+            img_np = std * img_np + mean
+            img_np = np.clip(img_np * 255, 0, 255).astype(np.uint8)
+            img_pil = Image.fromarray(img_np)
+        else:
+            img_pil = Image.fromarray(img)
+        
+        # 保存图像
+        img_path = images_dir / f"{img_id}_aug.jpg"
+        img_pil.save(img_path)
+        
+        # 保存标签（YOLO格式）
+        label_path = labels_dir / f"{img_id}_aug.txt"
+        with open(label_path, 'w') as f:
+            if 'boxes' in target and len(target['boxes']) > 0:
+                boxes = target['boxes'].numpy()
+                labels = target['labels'].numpy()
+                
+                for box, label in zip(boxes, labels):
+                    # YOLO格式: class x_center y_center width height
+                    f.write(f"{label} {box[0]} {box[1]} {box[2]} {box[3]}\n")
+    
+    print(f"增强数据集已保存到: {output_dir}")
+    print(f"保存了 {num_samples} 个增强样本")
+
+# 添加一个实用函数来检查Albumentations参数
+def check_albumentations_version():
+    """检查Albumentations版本及参数兼容性"""
+    print(f"Albumentations版本: {A.__version__}")
+    try:
+        # 尝试创建RandomResizedCrop
+        transform = A.RandomResizedCrop(size=(640, 640))
+        print("使用 size=(height, width) 参数成功")
+        return "size"
+    except:
+        try:
+            transform = A.RandomResizedCrop(height=640, width=640)
+            print("使用 height, width 参数成功")
+            return "height_width"
+        except:
+            print("无法确定正确的参数格式，请检查Albumentations版本")
+            return None
+
 if __name__ == "__main__":
+    # 检查Albumentations版本
+    param_format = check_albumentations_version()
+    
     # 分析数据集并生成可视化图表
     analyze_dataset()
     
-    # 测试数据加载器
+    # 获取数据加载器
     train_loader, val_loader, test_loader = create_data_loaders()
     print(f"训练集样本数: {len(train_loader.dataset)}")
     print(f"验证集样本数: {len(val_loader.dataset)}")
     print(f"测试集样本数: {len(test_loader.dataset)}")
+    
+    # 可视化一些增强后的样本
+    visualize_augmented_samples(train_loader.dataset, num_samples=10)
+    
+    # 是否要保存整个增强数据集
+    save_full_dataset = True  # 设置为True可保存全部增强数据集
+    if save_full_dataset:
+        augmented_dataset_dir = VISUALIZATION_PATH / "augmented_dataset"
+        save_augmented_dataset(
+            train_loader.dataset, 
+            augmented_dataset_dir,
+            num_samples=100  # 限制为100个样本，设为None保存全部
+        )
 
 
     import torch

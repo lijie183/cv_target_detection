@@ -2,145 +2,140 @@
 
 我找到了两个数据集，不知道能不能用。下面我将两个数据集的大概内容以及目录结构介绍一下，请你仔细分析。
 
-在根目录下，有一个data文件夹，在data文件夹下，有两个数据集文件，分别是：data\VOCtest_06-Nov-2007和data\VOCtrainval_06-Nov-2007
+在根目录下，有一个data文件夹，在data文件夹下，有一个data\insects文件夹，下面有data\insects\test，data\insects\train，data\insects\val
 
-对于data\VOCtrainval_06-Nov-2007下面有data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\Annotations、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\JPEGImages、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationClass、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationObject五个文件夹。
-对于data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\Annotations，下面有若干xml文件，如data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\Annotations\000005.xml：
-格式是：
-<annotation>
-	<folder>VOC2007</folder>
-	<filename>000005.jpg</filename>
+以data\insects\val为例，下面有data\insects\val\annotations，data\insects\val\images
+在data\insects\val\annotations下有若干xml文件，data\insects\val\annotations\xmls\1221.xml，格式是<annotation>
+	<folder>江西林</folder>
+	<filename>1221.jpeg</filename>
+	<path>C:\Users\83885\Desktop\windows_v1.5.0\annotation\江西林\1221.jpeg</path>
 	<source>
-		<database>The VOC2007 Database</database>
-		<annotation>PASCAL VOC2007</annotation>
-		<image>flickr</image>
-		<flickrid>325991873</flickrid>
+		<database>Unknown</database>
 	</source>
-	<owner>
-		<flickrid>archintent louisville</flickrid>
-		<name>?</name>
-	</owner>
 	<size>
-		<width>500</width>
-		<height>375</height>
+		<width>1174</width>
+		<height>1174</height>
 		<depth>3</depth>
 	</size>
 	<segmented>0</segmented>
 	<object>
-		<name>chair</name>
-		<pose>Rear</pose>
-		<truncated>0</truncated>
-		<difficult>0</difficult>
-		<bndbox>
-			<xmin>263</xmin>
-			<ymin>211</ymin>
-			<xmax>324</xmax>
-			<ymax>339</ymax>
-		</bndbox>
-	</object>
-	<object>
-		<name>chair</name>
+		<name>Leconte</name>
 		<pose>Unspecified</pose>
 		<truncated>0</truncated>
 		<difficult>0</difficult>
 		<bndbox>
-			<xmin>165</xmin>
-			<ymin>264</ymin>
-			<xmax>253</xmax>
-			<ymax>372</ymax>
+			<xmin>580</xmin>
+			<ymin>288</ymin>
+			<xmax>743</xmax>
+			<ymax>411</ymax>
 		</bndbox>
 	</object>
 	<object>
-		<name>chair</name>
-		<pose>Unspecified</pose>
-		<truncated>1</truncated>
-		<difficult>1</difficult>
-		<bndbox>
-			<xmin>5</xmin>
-			<ymin>244</ymin>
-			<xmax>67</xmax>
-			<ymax>374</ymax>
-		</bndbox>
-	</object>
-	<object>
-		<name>chair</name>
+		<name>acuminatus</name>
 		<pose>Unspecified</pose>
 		<truncated>0</truncated>
 		<difficult>0</difficult>
 		<bndbox>
-			<xmin>241</xmin>
-			<ymin>194</ymin>
-			<xmax>295</xmax>
-			<ymax>299</ymax>
+			<xmin>487</xmin>
+			<ymin>582</ymin>
+			<xmax>543</xmax>
+			<ymax>656</ymax>
 		</bndbox>
 	</object>
 	<object>
-		<name>chair</name>
+		<name>Boerner</name>
 		<pose>Unspecified</pose>
-		<truncated>1</truncated>
-		<difficult>1</difficult>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
 		<bndbox>
-			<xmin>277</xmin>
-			<ymin>186</ymin>
-			<xmax>312</xmax>
-			<ymax>220</ymax>
+			<xmin>436</xmin>
+			<ymin>744</ymin>
+			<xmax>516</xmax>
+			<ymax>870</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>Linnaeus</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>585</xmin>
+			<ymin>611</ymin>
+			<xmax>638</xmax>
+			<ymax>695</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>armandi</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>593</xmin>
+			<ymin>475</ymin>
+			<xmax>654</xmax>
+			<ymax>554</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>Leconte</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>500</xmin>
+			<ymin>460</ymin>
+			<xmax>600</xmax>
+			<ymax>593</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>coleoptera</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>514</xmin>
+			<ymin>287</ymin>
+			<xmax>551</xmax>
+			<ymax>340</ymax>
+		</bndbox>
+	</object>
+	<object>
+		<name>coleoptera</name>
+		<pose>Unspecified</pose>
+		<truncated>0</truncated>
+		<difficult>0</difficult>
+		<bndbox>
+			<xmin>542</xmin>
+			<ymin>407</ymin>
+			<xmax>584</xmax>
+			<ymax>455</ymax>
 		</bndbox>
 	</object>
 </annotation>
 
+data\insects\val\images则是对应的若干jpeg图片，data\insects\val\images\1221.jpeg。
 
-对于data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets，下面有三个文件夹，分别是data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main、data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Segmentation
-在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout有data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\train.txt，格式是000012
-000026
-000034
-000036
-在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\trainval.txt格式是：000005
-000007
-000012
-在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\val.txt，格式是：data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Layout\val.txt。
-
-在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main有若干txt文件，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main\aeroplane_train.txt，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main\aeroplane_trainval.txt，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\ImageSets\Main\aeroplane_val.txt，每一个txt都是000012 -1
-000017 -1
-000023 -1
-类似的格式。
+测试和训练的文件结构与上面的验证集一样。
 
 
-在data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\JPEGImages下面有若干张图片，是彩色的原图，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\JPEGImages\000005.jpg。
+现在，请你根据上面的要求，帮我写一下这个实验的代码，要求使用yolo来实现目标检测，就使用我的数据集里面的train，test和val三个文件夹里面的数据。
 
-data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationClass下面也是若干张png，突出了主题，背景是黑色的，有不同颜色的主体。，data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationClass\000032.png
+你可以在根目录下创建一个yolo_code文件夹，里面有不同的脚本，实现不同的逻辑。尽可能多的将整个过程可视化出来。将结果好好归类，便于寻找。
 
-data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationObject也是若干张png，北京也是黑色的，只不过有不同颜色的主体，物体和上面那个文件夹一样，不过颜色类别更多一些：data\VOCtrainval_06-Nov-2007\VOCdevkit\VOC2007\SegmentationObject\000032.png
+一定要确保代码的正确性。老师比较看重算法的先进行，所以设计yolo的时候，尽可能的贴合我的目标追踪的目的，尽可能的完善，让训练指标好。在训练的时候，使用早停机制，5轮内没有提升就截止。
+打印一些信息，将日志保存起来。
+尽可能多的将指标和可视化图表保存起来。
 
-另一个文件夹data\VOCtest_06-Nov-2007和上面这个文件夹差不多。
+对于原始的数据，可以采取一些数据增强策略。我的gpu只有4G。
+对于模型要好好的优化
 
+请你仔细分析上述实验的要求，将完整的可执行脚本给我。确保算法的先进行和实用性，采取多种手段提高模型的效果。（使用torch）。先给我列出详细的过程，然后将脚本给我。确保没有错误，可执行，可以很好的根据数据集的特点完成我的目标追踪的任务。
+注意做好代码的分类保存以及输出结果的分类保存。尽可能的将实验过程可视化出来。一定要将各种各样的指标、效果等，尽可能多的可视化展示，确保simhei字体。
 
-请你仔细分析一下我的数据集的特点，然后帮我写一个实验的代码，使用效果很好的yolo技术进行实验。
+可以使用yolov10或者以上的版本，最好有一些创新点，一定要创新，有先进性，同时又不会报错，指标也要好。
 
-一定要确保指标要好，确保效果要好。脚本放在根目录下的yolo_code文件夹下面，可以分为多个独立的脚本进行。输出结果也要放在yolo_code下面的results下面。
-
-训练的时候，要尽可能的将训练过程的指标以及其他结果使用可视化图表可视化出来，包含各种各样的图片，越多越好。
-
-验证的时候，也要尽可能的将验证结果指标等可视化展示，越多越好，图表要高级，确保不会出现字体问题，使用simhei字体。
-
-结果要注意好类型的区分，不用的结果放在不同文件夹内。
-
-总之，尽可能多的可视化展示。
-
-另外，代码要根据数据集的特点以及目标检测的目的，尽可能好的优化实验的效果，提高准确率等指标
-
-代码也不要出现，仔细分析数据集，仔细检查。
-
-给我脚本的时候，告诉我脚本的相对路径。
-
-可以想给我一个实验各个步骤使用的技术，确保不会出错。
-
-
-还要有一个根据测试集进行测试的脚本。
-
-根据你的理解，好好设计实验，结果一定要好，
-
-
-根据上述要求，将完整的代码给我，确保效果非常好，并且可视化结果也要多。不要使用yolov8，希望使用一个比较新的yolo技术，一定要有创新，算法要用先进行和实用性。
-
-
+将完整的代码以及代码的目录结构给我，确保可运行，并且不会出错。
 
