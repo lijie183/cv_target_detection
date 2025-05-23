@@ -1,0 +1,15 @@
+names:
+- Boerner
+- Leconte
+- Linnaeus
+- acuminatus
+- armandi
+- coleoptera
+- linnaeus
+nc: 7
+train: "C:\\Users\\lijie\\Desktop\\\u5927\u4E09\u4E0B\u8D44\u6599\\CV-work\\\u4E0A\
+  \u673A\u8BFE \u56DB\u4E2A\u5B9E\u9A8C\u62A5\u544A\\\u5B9E\u9A8C2-\u76EE\u6807\u68C0\
+  \u6D4B\\cv-target-detect\\yolo_code\\data\\images\\train"
+val: "C:\\Users\\lijie\\Desktop\\\u5927\u4E09\u4E0B\u8D44\u6599\\CV-work\\\u4E0A\u673A\
+  \u8BFE \u56DB\u4E2A\u5B9E\u9A8C\u62A5\u544A\\\u5B9E\u9A8C2-\u76EE\u6807\u68C0\u6D4B\
+  \\cv-target-detect\\yolo_code\\data\\images\\val"

@@ -1,2920 +1,3345 @@
-import torch
-import math
+# 目标检测实验方案设计
 
-class ModelEMA:
-    """指数移动平均模型"""
-    def __init__(self, model, decay=0.9999, updates=0):
-        """
-        创建EMA模型
-        
-        参数:
-            model: 需要创建EMA的模型
-            decay: EMA衰减率
-            updates: 已经进行的更新次数
-        """
-        # 评估模式
-        self.ema = model.eval().clone() if hasattr(model, 'clone') else copy_model(model).eval()
-        self.updates = updates  # 更新次数
-        self.decay = lambda x: decay * (1 - math.exp(-x / 2000))  # 指数移动平均的衰减函数
-        
-        # 更新模型的buffer
-        for p in self.ema.parameters():
-            p.requires_grad_(False)
-    
-    def update(self, model):
-        """
-        更新EMA模型
-        
-        参数:
-            model: 当前训练的模型
-        """
-        with torch.no_grad():
-            self.updates += 1
-            d = self.decay(self.updates)
-            
-            # 更新参数
-            msd = model.state_dict()
-            for k, v in self.ema.state_dict().items():
-                if v.dtype.is_floating_point:
-                    v *= d
-                    v += (1 - d) * msd[k].detach()
-    
-    def update_attr(self, model, include=(), exclude=('process_group', 'reducer')):
-        """
-        更新模型属性 (例如 anchors 和 stride等)
-        
-        参数:
-            model: 源模型
-            include: 包含的属性列表
-            exclude: 排除的属性列表
-        """
-        # 只需要更新属性而不是参数
-        for k, v in model.__dict__.items():
-            if (len(include) and k not in include) or k.startswith('_') or k in exclude:
-                continue
-            else:
-                setattr(self.ema, k, v)
+根据您提供的数据集信息和要求，我将设计一套基于YOLOv10的昆虫目标检测实验方案。这套方案将包含先进的技术和创新点，确保实验结果具有高精度和实用性。
 
-def copy_model(model):
-    """
-    创建模型的深拷贝副本
-    
-    参数:
-        model: 需要拷贝的源模型
-    
-    返回:
-        新的模型副本
-    """
-    import copy
-    return copy.deepcopy(model)
+## 实验流程概述
 
+1. **数据准备与预处理**：解析XML格式的标注文件，转换为YOLO格式
+2. **数据增强与分析**：实现多种数据增强策略，分析并可视化数据分布
+3. **模型构建与优化**：基于YOLOv10架构，引入多项创新改进
+4. **训练与监控**：实现训练过程监控、早停机制和丰富的可视化
+5. **评估与测试**：多指标评估模型性能，可视化检测结果
 
-    import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import math
+## 创新点概述
 
-from config import *
+1. **FocalAttention模块**：引入注意力机制，增强对小目标昆虫的感知能力
+2. **自适应特征融合**：根据不同尺度的昆虫特征动态调整融合权重
+3. **标签平滑与混合损失函数**：结合Focal Loss和IoU Loss提高检测准确性
+4. **多尺度训练与推理**：适应昆虫体型差异大的特点
+5. **梯度集中学习策略**：针对昆虫特征学习的优化策略
 
-def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=True, CIoU=False, eps=1e-7):
-    """计算边界框IOU"""
-    # 如果需要将中心宽高坐标格式转换为边角坐标格式
-    if not x1y1x2y2:
-        # 转换box1
-        b1_x1, b1_x2 = box1[:, 0] - box1[:, 2] / 2, box1[:, 0] + box1[:, 2] / 2
-        b1_y1, b1_y2 = box1[:, 1] - box1[:, 3] / 2, box1[:, 1] + box1[:, 3] / 2
-        # 转换box2
-        b2_x1, b2_x2 = box2[:, 0] - box2[:, 2] / 2, box2[:, 0] + box2[:, 2] / 2
-        b2_y1, b2_y2 = box2[:, 1] - box2[:, 3] / 2, box2[:, 1] + box2[:, 3] / 2
-    else:
-        # 获取边角坐标
-        b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
-        b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+## 文件结构设计
 
-    # 交集区域
-    inter = (torch.min(b1_x2, b2_x2) - torch.max(b1_x1, b2_x1)).clamp(0) * \
-            (torch.min(b1_y2, b2_y2) - torch.max(b1_y1, b2_y1)).clamp(0)
+```
+yolo_code/
+├── scripts/
+│   ├── data_preprocessing.py  # 数据预处理和转换
+│   ├── data_augmentation.py   # 数据增强和可视化
+│   ├── model.py               # 改进的YOLOv10模型定义
+│   ├── train.py               # 模型训练与监控
+│   └── evaluate.py            # 模型评估与结果可视化
+├── results/
+│   ├── logs/                  # 训练日志
+│   ├── models/                # 保存的模型
+│   ├── visualizations/        # 数据和结果可视化
+│   ├── metrics/               # 评估指标
+│   └── predictions/           # 模型预测结果
+```
 
-    # 并集区域
-    w1, h1 = b1_x2 - b1_x1, b1_y2 - b1_y1 + eps
-    w2, h2 = b2_x2 - b2_x1, b2_y2 - b2_y1 + eps
-    union = w1 * h1 + w2 * h2 - inter + eps
+## 代码实现
 
-    # IoU
-    iou = inter / union
-    
-    if GIoU or DIoU or CIoU:
-        # 最小外接矩形
-        cw = torch.max(b1_x2, b2_x2) - torch.min(b1_x1, b2_x1)  # 包围盒宽度
-        ch = torch.max(b1_y2, b2_y2) - torch.min(b1_y1, b2_y1)  # 包围盒高度
-        
-        if CIoU or DIoU:  # 距离IoU
-            c2 = cw ** 2 + ch ** 2 + eps  # 最小外接矩形对角线平方
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 +
-                   (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2) / 4  # 中心点距离平方
-            
-            if DIoU:
-                return iou - rho2 / c2  # DIoU
-            
-            elif CIoU:  # 完整版CIoU
-                v = (4 / math.pi ** 2) * torch.pow(torch.atan(w2 / h2) - torch.atan(w1 / h1), 2)
-                with torch.no_grad():
-                    alpha = v / (v - iou + (1 + eps))
-                return iou - (rho2 / c2 + v * alpha)  # CIoU
-        
-        else:  # GIoU
-            c_area = cw * ch + eps  # 最小外接矩形面积
-            return iou - (c_area - union) / c_area  # GIoU
-    
-    else:
-        return iou  # 普通IoU
+下面是五个主要脚本的完整实现：
 
-class YOLOLoss(nn.Module):
-    def __init__(self, num_classes, device):
-        super(YOLOLoss, self).__init__()
-        self.num_classes = num_classes
-        self.device = device
-        
-        # 三个尺度的锚点和对应的步长
-        self.anchors = torch.tensor([
-            [[10, 13], [16, 30], [33, 23]],  # P3/8
-            [[30, 61], [62, 45], [59, 119]],  # P4/16
-            [[116, 90], [156, 198], [373, 326]]  # P5/32
-        ]).float().to(device)
-        
-        self.strides = torch.tensor([8, 16, 32]).to(device)
-        
-        # 损失函数权重
-        self.lambda_coord = 5.0  # 坐标损失权重
-        self.lambda_conf = 1.0   # 置信度损失权重
-        self.lambda_cls = 1.0    # 分类损失权重
-        
-        # 用于焦点损失
-        self.BCEcls = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(1.0, device=device))
-        self.BCEobj = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(1.0, device=device))
-        
-        # CIoU Loss
-        self.box_loss_fn = bbox_iou
-    
-    def forward(self, predictions, targets):
-        # 初始化损失
-        loss_box = torch.zeros(1, device=self.device)    # 边界框回归损失
-        loss_obj = torch.zeros(1, device=self.device)    # 目标置信度损失
-        loss_cls = torch.zeros(1, device=self.device)    # 分类损失
-        
-        # 三个尺度的输出
-        for i, pred in enumerate(predictions):
-            # 获取当前尺度的锚点和步长
-            anchors = self.anchors[i]
-            stride = self.strides[i]
-            
-            # 获取特征图尺寸
-            bs, _, ny, nx = pred.shape
-            
-            # 重塑预测结果
-            pred = pred.view(bs, 3, 5 + self.num_classes, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
-            
-            # 预测坐标、置信度和分类分数
-            pred_xy = torch.sigmoid(pred[..., 0:2])   # 中心点坐标
-            pred_wh = torch.exp(pred[..., 2:4]) * anchors.view(1, 3, 1, 1, 2) / stride  # 宽高
-            pred_obj = torch.sigmoid(pred[..., 4])    # 置信度
-            pred_cls = torch.sigmoid(pred[..., 5:])   # 类别
-            
-            # 创建网格
-            grid_y, grid_x = torch.meshgrid([torch.arange(ny), torch.arange(nx)])
-            grid = torch.stack((grid_x, grid_y), 2).view(1, 1, ny, nx, 2).float().to(self.device)
-            
-            # 计算预测框的绝对坐标
-            pred_boxes = torch.cat((pred_xy + grid, pred_wh), dim=4)
-            
-            # 匹配预测和目标
-            for b, target in enumerate(targets):
-                # 忽略没有目标的图像
-                if len(target['boxes']) == 0:
-                    continue
-                
-                # 目标框和标签
-                tcls = target['labels']  # 类别
-                tbox = target['boxes']   # 边界框 (x_center, y_center, width, height)
-                
-                # 计算目标在特征图上的尺度
-                tbox_scaled = tbox.clone().to(self.device)
-                tbox_scaled[:, 0:2] = tbox_scaled[:, 0:2] * nx  # 中心点坐标
-                tbox_scaled[:, 2:4] = tbox_scaled[:, 2:4] * nx  # 宽高
-                
-                # 为每个目标找到最佳的锚点和网格位置
-                for t in range(tbox.size(0)):
-                    # 目标框
-                    gx, gy = tbox_scaled[t, 0], tbox_scaled[t, 1]  # 网格坐标
-                    gw, gh = tbox_scaled[t, 2], tbox_scaled[t, 3]  # 宽高
-                    
-                    # 网格索引
-                    gi, gj = int(gx), int(gy)
-                    
-                    # 限制索引范围
-                    gi = max(0, min(gi, nx-1))
-                    gj = max(0, min(gj, ny-1))
-                    
-                    # 找到最佳锚点
-                    anchors_wh = anchors / stride
-                    box_wh = torch.tensor([gw, gh]).to(self.device)
-                    
-                    # 计算与所有锚点的宽高比
-                    ratios = box_wh / anchors_wh
-                    ratios = torch.max(ratios, 1/ratios)
-                    max_ratio, _ = ratios.max(dim=1)
-                    
-                    # 选择最佳锚点
-                    a = torch.argmin(max_ratio)
-                    
-                    # 目标值
-                    target_obj = torch.zeros_like(pred_obj[b])
-                    target_obj[a, gj, gi] = 1
-                    
-                    # 类别
-                    target_cls = torch.zeros_like(pred_cls[b])
-                    target_cls[a, gj, gi, tcls[t]] = 1
-                    
-                    # 边界框坐标
-                    target_box = torch.zeros_like(pred_boxes[b, a, gj, gi])
-                    target_box[0] = gx - gi
-                    target_box[1] = gy - gj
-                    target_box[2] = gw
-                    target_box[3] = gh
-                    
-                    # 计算边界框损失
-                    iou = self.box_loss_fn(
-                        pred_boxes[b, a, gj, gi].unsqueeze(0),
-                        target_box.unsqueeze(0),
-                        x1y1x2y2=False,
-                        DIoU=True
-                    )
-                    loss_box += (1.0 - iou) * self.lambda_coord
-                    
-                    # 置信度损失
-                    loss_obj += self.BCEobj(
-                        pred_obj[b, a, gj, gi],
-                        target_obj[a, gj, gi]
-                    ) * self.lambda_conf
-                    
-                    # 分类损失
-                    loss_cls += self.BCEcls(
-                        pred_cls[b, a, gj, gi],
-                        target_cls[a, gj, gi]
-                    ) * self.lambda_cls
-        
-        # 总损失
-        loss = loss_box + loss_obj + loss_cls
-        
-        return loss
+### 1. 数据预处理脚本
 
-        import torch
-import numpy as np
-import torchvision
-from scipy.interpolate import interp1d
-
-def xywh2xyxy(x):
-    """将(x,y,w,h)格式转换为(x1,y1,x2,y2)格式"""
-    y = torch.zeros_like(x) if isinstance(x, torch.Tensor) else np.zeros_like(x)
-    y[..., 0] = x[..., 0] - x[..., 2] / 2  # x1
-    y[..., 1] = x[..., 1] - x[..., 3] / 2  # y1
-    y[..., 2] = x[..., 0] + x[..., 2] / 2  # x2
-    y[..., 3] = x[..., 1] + x[..., 3] / 2  # y2
-    return y
-
-def box_iou(box1, box2):
-    """计算两组框的IoU"""
-    # 获取维度
-    b1_x1, b1_y1, b1_x2, b1_y2 = box1.T
-    b2_x1, b2_y1, b2_x2, b2_y2 = box2.T
-    
-    # 计算交集区域
-    x1 = torch.max(b1_x1[:, None], b2_x1)
-    y1 = torch.max(b1_y1[:, None], b2_y1)
-    x2 = torch.min(b1_x2[:, None], b2_x2)
-    y2 = torch.min(b1_y2[:, None], b2_y2)
-    
-    # 计算交集面积
-    intersection = torch.clamp(x2 - x1, min=0) * torch.clamp(y2 - y1, min=0)
-    
-    # 计算并集面积
-    box1_area = (b1_x2 - b1_x1) * (b1_y2 - b1_y1)
-    box2_area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)
-    union = box1_area[:, None] + box2_area - intersection
-    
-    # 计算IoU
-    iou = intersection / union
-    
-    return iou
-
-def non_max_suppression(prediction, conf_thres=0.25, iou_thres=0.45, classes=None, agnostic=False, multi_label=False, max_det=300):
-    """对检测结果进行非极大值抑制"""
-    # 检查
-    assert 0 <= conf_thres <= 1, f'置信度阈值 {conf_thres} 必须在0-1之间'
-    assert 0 <= iou_thres <= 1, f'IoU {iou_thres} 必须在0-1之间'
-
-    # 将预测转换为 [x1, y1, x2, y2, conf, cls]
-    nc = prediction.shape[2] - 5  # 类别数量
-    xc = prediction[..., 4] > conf_thres  # 候选对象
-
-    # 设置
-    min_wh, max_wh = 2, 4096  # (像素) 最小和最大框宽高
-    max_nms = 30000  # NMS前的最大框数
-    time_limit = 10.0  # NMS时间限制(秒)
-    multi_label &= nc > 1  # 多标签每框(需要 nc > 1)
-    
-    output = [None] * prediction.shape[0]
-    
-    for xi, x in enumerate(prediction):  # 图像索引, 图像推理
-        # 应用约束条件
-        x = x[xc[xi]]  # 保留置信度较高的部分
-        
-        # 如果没有框，继续
-        if not x.shape[0]:
-            continue
-            
-        # 将conf乘以class conf得到conf
-        x[:, 5:] *= x[:, 4:5]  # conf = obj_conf * cls_conf
-        
-        # 将(center_x, center_y, width, height)转换为(x1, y1, x2, y2)
-        box = xywh2xyxy(x[:, :4])
-        
-        # 应用NMS
-        if multi_label:
-            # 多标签的情况下，对每个类别分别应用NMS
-            i, j = (x[:, 5:] > conf_thres).nonzero(as_tuple=False).T
-            x = torch.cat((box[i], x[i, j + 5, None], j[:, None].float()), 1)
-        else:
-            # 最佳类别
-            conf, j = x[:, 5:].max(1, keepdim=True)
-            x = torch.cat((box, conf, j.float()), 1)[conf.view(-1) > conf_thres]
-        
-        # 过滤掉小框
-        if not x.shape[0]:
-            continue
-        
-        # 按照置信度排序
-        x = x[x[:, 4].argsort(descending=True)[:max_nms]]
-        
-        # 基于IoU进行NMS
-        c = x[:, 5:6] * (0 if agnostic else max_wh)  # 类别
-        boxes, scores = x[:, :4] + c, x[:, 4]  # 框(偏移cls)，分数
-        i = torchvision.ops.nms(boxes, scores, iou_thres)  # NMS
-        if i.shape[0] > max_det:  # 限制检测数
-            i = i[:max_det]
-        
-        output[xi] = x[i]
-    
-    return output
-
-def compute_ap(pred_boxes, target_boxes, iou_thres=0.5, class_names=None):
-    """
-    计算平均精度 (AP) 和 mAP
-    
-    参数:
-        pred_boxes (list): 预测框列表
-        target_boxes (list): 目标框列表
-        iou_thres (float): IoU阈值
-        class_names (list): 类别名称列表
-    
-    返回:
-        float: mAP值
-    """
-    # 如果没有预测或目标，返回0
-    if not pred_boxes or not target_boxes:
-        return 0.0
-    
-    # 转换为张量
-    if isinstance(pred_boxes[0], torch.Tensor):
-        pred_boxes = [p.cpu().numpy() for p in pred_boxes]
-    if isinstance(target_boxes[0], torch.Tensor):
-        target_boxes = [t.cpu().numpy() for t in target_boxes]
-    
-    # 计算每个类别的AP
-    ap = []
-    
-    # 如果没有类别名称，使用索引
-    if class_names is None:
-        class_names = list(range(len(pred_boxes[0])))
-    
-    for c in range(len(class_names)):
-        # 收集当前类别的预测和目标
-        p = [box for box in pred_boxes if box[c] > 0]
-        t = [box for box in target_boxes if box[c] > 0]
-        
-        # 如果该类别没有目标，跳过
-        if len(t) == 0:
-            continue
-        
-        # 如果该类别没有预测，AP为0
-        if len(p) == 0:
-            ap.append(0)
-            continue
-        
-        # 按置信度排序
-        p.sort(key=lambda x: x[4], reverse=True)
-        
-        # 初始化TP和FP计数
-        tp = np.zeros(len(p))
-        fp = np.zeros(len(p))
-        
-        # 计算TP和FP
-        for i, pred in enumerate(p):
-            best_iou = 0
-            best_idx = -1
-            
-            for j, target in enumerate(t):
-                iou = compute_iou(pred[:4], target[:4])
-                if iou > best_iou:
-                    best_iou = iou
-                    best_idx = j
-            
-            if best_iou >= iou_thres:
-                tp[i] = 1
-                # 删除已匹配的目标
-                t.pop(best_idx)
-            else:
-                fp[i] = 1
-        
-        # 累积TP和FP
-        tp_cumsum = np.cumsum(tp)
-        fp_cumsum = np.cumsum(fp)
-        
-        # 计算精确率和召回率
-        precision = tp_cumsum / (tp_cumsum + fp_cumsum + 1e-10)
-        recall = tp_cumsum / (len(target_boxes) + 1e-10)
-        
-        # 添加起点和终点
-        precision = np.concatenate(([0], precision, [0]))
-        recall = np.concatenate(([0], recall, [1]))
-        
-        # 确保精确率是降序的
-        for i in range(len(precision) - 1, 0, -1):
-            precision[i - 1] = max(precision[i - 1], precision[i])
-        
-        # 计算AP (AUC)
-        indices = np.where(recall[1:] != recall[:-1])[0]
-        ap.append(np.sum((recall[indices + 1] - recall[indices]) * precision[indices + 1]))
-    
-    # 计算mAP
-    return np.mean(ap) if len(ap) > 0 else 0.0
-
-def compute_iou(box1, box2):
-    """计算两个框的IoU"""
-    # 确保box1和box2是numpy数组
-    box1 = np.array(box1)
-    box2 = np.array(box2)
-    
-    # 计算交集区域
-    x1 = max(box1[0], box2[0])
-    y1 = max(box1[1], box2[1])
-    x2 = min(box1[2], box2[2])
-    y2 = min(box1[3], box2[3])
-    
-    # 计算交集面积
-    intersection = max(0, x2 - x1) * max(0, y2 - y1)
-    
-    # 计算并集面积
-    box1_area = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    box2_area = (box2[2] - box2[0]) * (box2[3] - box2[1])
-    union = box1_area + box2_area - intersection
-    
-    # 计算IoU
-    iou = intersection / union if union > 0 else 0
-    
-    return iou
-
-def ap_per_class(tp, conf, pred_cls, target_cls, target_boxes, iou_thres=0.5, eps=1e-16):
-    """
-    计算每个类别的平均精度 (AP) 和Precision-Recall曲线
-    
-    参数:
-        tp: 预测框
-        conf: 置信度分数
-        pred_cls: 预测类别
-        target_cls: 目标类别
-        target_boxes: 目标框
-        iou_thres: IoU阈值
-    
-    返回:
-        ap: 平均精度
-        p: 精确率
-        r: 召回率
-    """
-    # 找到每个类别的索引
-    unique_classes = np.unique(target_cls)
-    nc = len(unique_classes)  # 类别数量
-    
-    # 初始化返回值
-    ap = np.zeros((nc))
-    p = np.zeros((nc, 1000))
-    r = np.zeros((nc, 1000))
-    
-    # 对每个类别计算AP
-    for ci, c in enumerate(unique_classes):
-        # 筛选当前类别的预测和目标
-        i = pred_cls == c
-        n_pred = i.sum()  # 预测数量
-        
-        i_target = target_cls == c
-        n_target = i_target.sum()  # 目标数量
-        
-        if n_pred == 0 or n_target == 0:
-            continue
-        
-        # 计算IoU
-        iou = box_iou(tp[i], target_boxes[i_target])
-        
-        # 分配预测框到目标框
-        matched_indices = torch.where(iou > iou_thres)
-        
-        # 初始化TP和FP数组
-        tpc = np.zeros((n_pred))
-        fpc = np.zeros((n_pred))
-        
-        # 设置已匹配的预测为TP，未匹配的为FP
-        if matched_indices[0].shape[0]:
-            matches = torch.cat((matched_indices[0].unsqueeze(1), matched_indices[1].unsqueeze(1)), 1)
-            
-            if len(matches) > 0:
-                matches = matches[matches[:, 0].argsort()]
-                matches = matches[matches[:, 1].argsort(kind='mergesort')]
-                
-                # 根据置信度重新排序
-                matches = matches[np.argsort(-conf[i][matches[:, 0]])]
-                
-                # 只保留一对一的匹配
-                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
-                
-                tpc[matches[:, 0]] = 1
-                fpc[~np.isin(np.arange(n_pred), matches[:, 0])] = 1
-        
-        # 累积TP和FP
-        tp_cumsum = np.cumsum(tpc)
-        fp_cumsum = np.cumsum(fpc)
-        
-        # 计算精确率和召回率
-        rc = tp_cumsum / (n_target + eps)
-        pc = tp_cumsum / (tp_cumsum + fp_cumsum + eps)
-        
-        # 使用VOC07评估方法计算AP
-        mrec = np.concatenate(([0.], rc, [1.]))
-        mpre = np.concatenate(([0.], pc, [0.]))
-        
-        # 计算精确率包络
-        for i in range(mpre.size - 1, 0, -1):
-            mpre[i - 1] = max(mpre[i - 1], mpre[i])
-        
-        # 寻找召回率变化点的索引
-        i = np.where(mrec[1:] != mrec[:-1])[0]
-        
-        # 计算AUC (VOC07方法)
-        ap[ci] = np.sum((mrec[i + 1] - mrec[i]) * mpre[i + 1])
-        
-        # 插值1000个点用于绘图
-        interp = interp1d(np.arange(len(rc)) / (len(rc) - 1), rc)
-        r[ci] = interp(np.linspace(0, 1, 1000))
-        interp = interp1d(rc, pc)
-        p[ci] = interp(r[ci])
-    
-    return ap, p, r
-
-    import os
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from PIL import Image, ImageDraw, ImageFont
-import cv2
-import torch
-from matplotlib.font_manager import FontProperties
-import torchvision.transforms as T
-
-from config import *
-
-def visualize_batch(image, target, img_id, epoch, is_validation=False):
-    """可视化图像和目标框"""
-    # 转换图像为numpy数组用于matplotlib显示
-    img_np = image.permute(1, 2, 0).numpy()
-    
-    # 对图像进行标准化还原
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    img_np = std * img_np + mean
-    img_np = np.clip(img_np, 0, 1)
-    
-    # 创建图像
-    fig, ax = plt.subplots(1, figsize=(10, 10))
-    
-    # 显示图像
-    ax.imshow(img_np)
-    
-    # 获取图像尺寸
-    height, width = img_np.shape[:2]
-    
-    # 在图像上绘制边界框
-    if 'boxes' in target and len(target['boxes']) > 0:
-        boxes = target['boxes']
-        labels = target['labels']
-        
-        for box, label in zip(boxes, labels):
-            # 将YOLO格式的框 (x_center, y_center, width, height) 转换为 (x_min, y_min, width, height)
-            x_center, y_center, box_width, box_height = box.numpy()
-            
-            # 将归一化坐标转换为像素坐标
-            x_center *= width
-            y_center *= height
-            box_width *= width
-            box_height *= height
-            
-            # 计算左上角坐标
-            x_min = x_center - box_width / 2
-            y_min = y_center - box_height / 2
-            
-            # 获取类别颜色
-            color = COLOR_PALETTE[int(label) % len(COLOR_PALETTE)]
-            color = [c/255 for c in color]  # 转换为matplotlib需要的0-1范围
-            
-            # 绘制边界框
-            rect = patches.Rectangle(
-                (x_min, y_min), box_width, box_height, 
-                linewidth=2, edgecolor=color, facecolor='none'
-            )
-            ax.add_patch(rect)
-            
-            # 添加类别标签
-            class_name = VOC_CLASSES[int(label)]
-            ax.text(
-                x_min, y_min - 5, class_name, 
-                color=color, fontsize=10, fontweight='bold',
-                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1)
-            )
-    
-    # 添加图像ID和epoch信息
-    title = f"{'Validation' if is_validation else 'Training'} - Epoch {epoch+1} - {img_id}"
-    ax.set_title(title)
-    
-    # 隐藏坐标轴
-    ax.axis('off')
-    
-    # 设置紧凑布局
-    plt.tight_layout()
-    
-    return fig
-
-def visualize_predictions(image, predictions, target, img_id, class_names, conf_threshold=0.5):
-    """可视化检测结果"""
-    # 转换图像为numpy数组用于matplotlib显示
-    img_np = image.permute(1, 2, 0).numpy()
-    
-    # 对图像进行标准化还原
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    img_np = std * img_np + mean
-    img_np = np.clip(img_np, 0, 1)
-    
-    # 创建图像
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 10))
-    
-    # 显示图像和真实标注
-    ax1.imshow(img_np)
-    ax1.set_title(f"Ground Truth - {img_id}")
-    
-    # 获取图像尺寸
-    height, width = img_np.shape[:2]
-    
-    # 在图像上绘制真实边界框
-    if 'boxes' in target and len(target['boxes']) > 0:
-        boxes = target['boxes']
-        labels = target['labels']
-        
-        for box, label in zip(boxes, labels):
-            # 将YOLO格式的框 (x_center, y_center, width, height) 转换为 (x_min, y_min, width, height)
-            x_center, y_center, box_width, box_height = box.numpy()
-            
-            # 将归一化坐标转换为像素坐标
-            x_center *= width
-            y_center *= height
-            box_width *= width
-            box_height *= height
-            
-            # 计算左上角坐标
-            x_min = x_center - box_width / 2
-            y_min = y_center - box_height / 2
-            
-            # 获取类别颜色
-            color = COLOR_PALETTE[int(label) % len(COLOR_PALETTE)]
-            color = [c/255 for c in color]  # 转换为matplotlib需要的0-1范围
-            
-            # 绘制边界框
-            rect = patches.Rectangle(
-                (x_min, y_min), box_width, box_height, 
-                linewidth=2, edgecolor=color, facecolor='none'
-            )
-            ax1.add_patch(rect)
-            
-            # 添加类别标签
-            class_name = class_names[int(label)]
-            ax1.text(
-                x_min, y_min - 5, class_name, 
-                color=color, fontsize=10, fontweight='bold',
-                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1)
-            )
-    
-    # 显示图像和预测结果
-    ax2.imshow(img_np)
-    ax2.set_title(f"Predictions - {img_id}")
-    
-    # 在图像上绘制预测边界框
-    if predictions is not None and len(predictions) > 0:
-        for i in range(len(predictions)):
-            # 获取预测框和置信度
-            box = predictions[i, :4].cpu().numpy()
-            conf = predictions[i, 4].cpu().numpy()
-            
-            if conf < conf_threshold:
-                continue
-            
-            # 获取类别分数和预测的类别
-            cls_scores = predictions[i, 5:].cpu().numpy()
-            cls_id = np.argmax(cls_scores)
-            
-            # 将YOLO格式的框转换为矩形框
-            x1, y1, x2, y2 = box
-            
-            # 获取类别颜色
-            color = COLOR_PALETTE[int(cls_id) % len(COLOR_PALETTE)]
-            color = [c/255 for c in color]  # 转换为matplotlib需要的0-1范围
-            
-            # 绘制边界框
-            rect = patches.Rectangle(
-                (x1, y1), x2-x1, y2-y1, 
-                linewidth=2, edgecolor=color, facecolor='none'
-            )
-            ax2.add_patch(rect)
-            
-            # 添加类别标签和置信度
-            class_name = class_names[int(cls_id)]
-            ax2.text(
-                x1, y1 - 5, f"{class_name} {conf:.2f}", 
-                color=color, fontsize=10, fontweight='bold',
-                bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1)
-            )
-    
-    # 隐藏坐标轴
-    ax1.axis('off')
-    ax2.axis('off')
-    
-    # 设置紧凑布局
-    plt.tight_layout()
-    
-    return fig
-
-def visualize_test_predictions(image, detections, color_palette=None):
-    """可视化测试图像上的检测结果"""
-    if color_palette is None:
-        color_palette = COLOR_PALETTE
-    
-    # 创建图像副本
-    img_vis = image.copy()
-    
-    # 加载中文字体
-    try:
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        thickness = 2
-    except:
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.6
-        thickness = 2
-    
-    # 在图像上绘制检测框
-    for det in detections:
-        # 获取框、类别和置信度
-        box = det['bbox']  # [x1, y1, x2, y2]
-        category_id = det['category_id']
-        category_name = det['category_name']
-        score = det['score']
-        
-        # 获取类别颜色
-        color = color_palette[category_id % len(color_palette)]
-        
-        # 绘制边界框
-        x1, y1, x2, y2 = box
-        cv2.rectangle(img_vis, (x1, y1), (x2, y2), color, thickness)
-        
-        # 添加类别标签和置信度
-        label = f"{category_name} {score:.2f}"
-        
-        # 获取文本框大小
-        (text_width, text_height), _ = cv2.getTextSize(label, font, font_scale, thickness)
-        
-        # 绘制文本背景
-        cv2.rectangle(
-            img_vis, 
-            (x1, y1 - text_height - 10), 
-            (x1 + text_width, y1), 
-            color, 
-            -1
-        )
-        
-        # 绘制文本
-        cv2.putText(
-            img_vis, 
-            label, 
-            (x1, y1 - 5), 
-            font, 
-            font_scale, 
-            (255, 255, 255), 
-            thickness, 
-            cv2.LINE_AA
-        )
-    
-    return img_vis
-
-    import os
-import torch
-from pathlib import Path
-
-# 项目根目录
-ROOT = Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-# 数据集路径
-TRAIN_DATA_PATH = ROOT / "data" / "VOCtrainval_06-Nov-2007" / "VOCdevkit" / "VOC2007"
-TEST_DATA_PATH = ROOT / "data" / "VOCtest_06-Nov-2007" / "VOCdevkit" / "VOC2007"
-
-# 结果保存路径
-RESULTS_PATH = ROOT / "yolo_code" / "results"
-WEIGHTS_PATH = RESULTS_PATH / "weights"
-LOG_PATH = RESULTS_PATH / "logs"
-VISUALIZATION_PATH = RESULTS_PATH / "visualization"
-PREDICTION_PATH = RESULTS_PATH / "predictions"
-METRIC_PATH = RESULTS_PATH / "metrics"
-
-# 确保所有输出目录存在
-for path in [RESULTS_PATH, WEIGHTS_PATH, LOG_PATH, VISUALIZATION_PATH, PREDICTION_PATH, METRIC_PATH]:
-    path.mkdir(parents=True, exist_ok=True)
-
-# 训练参数
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 16
-NUM_WORKERS = 4
-EPOCHS = 100
-LEARNING_RATE = 1e-3
-WEIGHT_DECAY = 5e-4
-MOMENTUM = 0.937
-WARMUP_EPOCHS = 3
-IMG_SIZE = 640
-MULTI_SCALE = True
-USE_MOSAIC = True
-USE_MIXUP = True
-USE_CBAM = True
-USE_EMA = True
-USE_SWA = True
-
-# 类别信息
-VOC_CLASSES = [
-    "aeroplane", "bicycle", "bird", "boat", "bottle", 
-    "bus", "car", "cat", "chair", "cow", 
-    "diningtable", "dog", "horse", "motorbike", "person", 
-    "pottedplant", "sheep", "sofa", "train", "tvmonitor"
-]
-NUM_CLASSES = len(VOC_CLASSES)
-
-# 可视化设置
-FONT_PATH = str(ROOT / "yolo_code" / "utils" / "simhei.ttf")
-COLOR_PALETTE = [
-    (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255),
-    (255, 0, 255), (128, 0, 0), (0, 128, 0), (0, 0, 128), (128, 128, 0),
-    (0, 128, 128), (128, 0, 128), (64, 0, 0), (0, 64, 0), (0, 0, 64),
-    (64, 64, 0), (0, 64, 64), (64, 0, 64), (192, 0, 0), (0, 192, 0)
-]
-
-# 验证和测试参数
-CONF_THRESH = 0.25
-IOU_THRESH = 0.45
-USE_TTA = True  # Test-Time Augmentation
-
-
+````python
 import os
-import shutil
 import xml.etree.ElementTree as ET
-from tqdm import tqdm
+import pandas as pd
 import numpy as np
-from pathlib import Path
 import matplotlib.pyplot as plt
-from PIL import Image
-import torch
-from torch.utils.data import Dataset, DataLoader
-import torchvision.transforms as transforms
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
+from matplotlib.font_manager import FontProperties
+import shutil
+from tqdm import tqdm
+import logging
+import json
+from sklearn.model_selection import train_test_split
 import cv2
-import warnings
 
-# 忽略所有警告
-warnings.filterwarnings("ignore")
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join('..', 'results', 'logs', 'data_preprocessing.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-from config import *
+# 确保结果目录存在
+def ensure_dir(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
 
-class VOCDataset(Dataset):
-    def __init__(self, root_dir, image_set='train', transform=None, is_test=False):
-        self.root_dir = Path(root_dir)
-        self.transform = transform
-        self.is_test = is_test
-        
-        # 根据image_set确定图像ID列表
-        self.img_ids = []
-        list_file = self.root_dir / "ImageSets" / "Main" / f"{image_set}.txt"
-        
-        with open(list_file, 'r') as f:
-            for line in f:
-                # 处理行，提取图像ID
-                img_id = line.strip().split()[0]
-                self.img_ids.append(img_id)
-        
-        # 类别名称到索引的映射
-        self.class_to_idx = {cls_name: i for i, cls_name in enumerate(VOC_CLASSES)}
+# 创建必要的文件夹
+def create_directories():
+    directories = [
+        os.path.join('..', 'results'),
+        os.path.join('..', 'results', 'logs'),
+        os.path.join('..', 'results', 'models'),
+        os.path.join('..', 'results', 'visualizations'),
+        os.path.join('..', 'results', 'visualizations', 'dataset'),
+        os.path.join('..', 'results', 'metrics'),
+        os.path.join('..', 'results', 'predictions'),
+        os.path.join('..', 'data', 'yolo_format')
+    ]
     
-    def __len__(self):
-        return len(self.img_ids)
+    for directory in directories:
+        ensure_dir(directory)
     
-    def __getitem__(self, index):
-        img_id = self.img_ids[index]
-        
-        # 读取图像
-        img_path = self.root_dir / "JPEGImages" / f"{img_id}.jpg"
-        img = cv2.imread(str(img_path))
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        height, width = img.shape[:2]
-        
-        if not self.is_test:
-            # 读取标注
-            anno_path = self.root_dir / "Annotations" / f"{img_id}.xml"
-            boxes, labels = self._parse_annotation(anno_path)
-            
-            # 应用变换
-            if self.transform:
-                transformed = self.transform(image=img, bboxes=boxes, class_labels=labels)
-                img = transformed['image']
-                boxes = transformed['bboxes']
-                labels = transformed['class_labels']
-            
-            # 转换为torch张量
-            boxes = torch.as_tensor(boxes, dtype=torch.float32)
-            labels = torch.as_tensor(labels, dtype=torch.int64)
-            
-            # 创建目标字典
-            target = {
-                'boxes': boxes,
-                'labels': labels,
-                'image_id': torch.tensor([index]),
-                'orig_size': torch.as_tensor([height, width], dtype=torch.int64)
-            }
-            
-            return img, target, img_id
-        else:
-            # 测试模式，只返回图像
-            if self.transform:
-                transformed = self.transform(image=img)
-                img = transformed['image']
-            
-            return img, img_id, (height, width)
+    logger.info("创建目录结构完成")
+
+# 解析XML文件
+def parse_xml(xml_path):
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
     
-    def _parse_annotation(self, anno_path):
-        tree = ET.parse(anno_path)
-        root = tree.getroot()
+    # 获取图像信息
+    size = root.find('size')
+    width = int(size.find('width').text)
+    height = int(size.find('height').text)
+    
+    # 获取所有目标信息
+    objects = []
+    for obj in root.findall('object'):
+        name = obj.find('name').text
+        bbox = obj.find('bndbox')
+        xmin = float(bbox.find('xmin').text)
+        ymin = float(bbox.find('ymin').text)
+        xmax = float(bbox.find('xmax').text)
+        ymax = float(bbox.find('ymax').text)
         
-        boxes = []
-        labels = []
+        objects.append({
+            'name': name,
+            'bbox': [xmin, ymin, xmax, ymax]
+        })
+    
+    return {
+        'width': width,
+        'height': height,
+        'objects': objects
+    }
+
+# 将边界框转换为YOLO格式 (x_center, y_center, width, height) - 归一化坐标
+def convert_to_yolo_format(bbox, img_width, img_height):
+    x_min, y_min, x_max, y_max = bbox
+    
+    x_center = (x_min + x_max) / 2.0
+    y_center = (y_min + y_max) / 2.0
+    width = x_max - x_min
+    height = y_max - y_min
+    
+    # 归一化
+    x_center /= img_width
+    y_center /= img_height
+    width /= img_width
+    height /= img_height
+    
+    return [x_center, y_center, width, height]
+
+# 转换数据集到YOLO格式
+def convert_dataset_to_yolo(data_dir, yolo_dir, class_mapping):
+    subsets = ['train', 'val', 'test']
+    
+    # 准备YOLO格式目录
+    for subset in subsets:
+        ensure_dir(os.path.join(yolo_dir, subset, 'images'))
+        ensure_dir(os.path.join(yolo_dir, subset, 'labels'))
+    
+    class_stats = {subset: {} for subset in subsets}
+    image_sizes = {subset: [] for subset in subsets}
+    
+    # 处理每个子集
+    for subset in subsets:
+        logger.info(f"处理{subset}数据集...")
         
-        for obj in root.findall('object'):
-            difficult = int(obj.find('difficult').text)
-            if difficult == 1:  # 跳过difficult=1的对象
+        anno_dir = os.path.join(data_dir, 'insects', subset, 'annotations')
+        img_dir = os.path.join(data_dir, 'insects', subset, 'images')
+        
+        xml_files = [f for f in os.listdir(anno_dir) if f.endswith('.xml')]
+        
+        for xml_file in tqdm(xml_files, desc=f"转换{subset}集"):
+            # 解析XML
+            xml_path = os.path.join(anno_dir, xml_file)
+            try:
+                data = parse_xml(xml_path)
+            except Exception as e:
+                logger.error(f"解析XML文件{xml_file}时出错: {e}")
                 continue
-                
-            name = obj.find('name').text
-            if name not in self.class_to_idx:
+            
+            # 准备图像文件
+            img_filename = os.path.splitext(xml_file)[0] + '.jpeg'
+            img_src = os.path.join(img_dir, img_filename)
+            
+            # 检查图像文件是否存在
+            if not os.path.exists(img_src):
+                logger.warning(f"图像文件不存在: {img_src}")
                 continue
-                
-            bbox = obj.find('bndbox')
-            xmin = float(bbox.find('xmin').text)
-            ymin = float(bbox.find('ymin').text)
-            xmax = float(bbox.find('xmax').text)
-            ymax = float(bbox.find('ymax').text)
             
-            # 归一化坐标
-            img_width = float(root.find('size/width').text)
-            img_height = float(root.find('size/height').text)
+            # 复制图像文件
+            img_dst = os.path.join(yolo_dir, subset, 'images', img_filename)
+            shutil.copy(img_src, img_dst)
             
-            # YOLO格式：x_center, y_center, width, height (归一化)
-            x_center = ((xmin + xmax) / 2) / img_width
-            y_center = ((ymin + ymax) / 2) / img_height
-            width = (xmax - xmin) / img_width
-            height = (ymax - ymin) / img_height
+            # 创建标签文件
+            label_filename = os.path.splitext(xml_file)[0] + '.txt'
+            label_path = os.path.join(yolo_dir, subset, 'labels', label_filename)
             
-            boxes.append([x_center, y_center, width, height])
-            labels.append(self.class_to_idx[name])
+            # 获取图像尺寸
+            img_width = data['width']
+            img_height = data['height']
+            image_sizes[subset].append((img_width, img_height))
+            
+            # 写入YOLO格式标签
+            with open(label_path, 'w') as f:
+                for obj in data['objects']:
+                    class_name = obj['name']
+                    if class_name not in class_mapping:
+                        logger.warning(f"未知类别: {class_name}，跳过该目标")
+                        continue
+                    
+                    class_id = class_mapping[class_name]
+                    
+                    # 统计类别数量
+                    if class_name not in class_stats[subset]:
+                        class_stats[subset][class_name] = 0
+                    class_stats[subset][class_name] += 1
+                    
+                    # 转换边界框并写入
+                    yolo_bbox = convert_to_yolo_format(obj['bbox'], img_width, img_height)
+                    f.write(f"{class_id} {' '.join(map(str, yolo_bbox))}\n")
+    
+    return class_stats, image_sizes
+
+# 生成YOLO配置文件
+def generate_yolo_config(yolo_dir, class_names):
+    # 创建数据配置文件
+    data_config = {
+        'train': os.path.join(yolo_dir, 'train', 'images'),
+        'val': os.path.join(yolo_dir, 'val', 'images'),
+        'test': os.path.join(yolo_dir, 'test', 'images'),
+        'nc': len(class_names),
+        'names': class_names
+    }
+    
+    with open(os.path.join(yolo_dir, 'data.yaml'), 'w') as f:
+        for key, value in data_config.items():
+            if key == 'names':
+                f.write(f"{key}: {value}\n")
+            else:
+                f.write(f"{key}: {value}\n")
+    
+    logger.info(f"生成YOLO配置文件: {os.path.join(yolo_dir, 'data.yaml')}")
+
+# 可视化数据集统计
+def visualize_dataset_stats(class_stats, image_sizes, output_dir):
+    font = FontProperties(fname=r"C:\Windows\Fonts\simhei.ttf", size=12)
+    
+    # 1. 类别分布可视化
+    plt.figure(figsize=(12, 8))
+    
+    for i, subset in enumerate(['train', 'val', 'test']):
+        plt.subplot(1, 3, i+1)
+        if not class_stats[subset]:
+            plt.text(0.5, 0.5, f"无{subset}数据", 
+                     horizontalalignment='center', verticalalignment='center')
+            continue
+            
+        labels = list(class_stats[subset].keys())
+        sizes = list(class_stats[subset].values())
         
-        return boxes, labels
-
-def create_data_loaders():
-    # 训练数据增强
-    train_transform = A.Compose([
-        # 使用size参数
-        A.RandomResizedCrop(size=(IMG_SIZE, IMG_SIZE), scale=(0.1, 1.0)),
-        A.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1, p=0.5),
-        A.HorizontalFlip(p=0.5),
-        A.RandomRotate90(p=0.5),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2(),
-    ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
+        plt.pie(sizes, labels=labels, autopct='%1.1f%%')
+        plt.title(f"{subset}集类别分布", fontproperties=font)
     
-    # 验证数据增强
-    val_transform = A.Compose([
-        A.Resize(height=IMG_SIZE, width=IMG_SIZE),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2(),
-    ], bbox_params=A.BboxParams(format='yolo', label_fields=['class_labels']))
-    
-    # 测试数据增强
-    test_transform = A.Compose([
-        A.Resize(height=IMG_SIZE, width=IMG_SIZE),
-        A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ToTensorV2(),
-    ])
-    
-    # 创建数据集
-    train_dataset = VOCDataset(
-        root_dir=TRAIN_DATA_PATH,
-        image_set='train',
-        transform=train_transform
-    )
-    
-    val_dataset = VOCDataset(
-        root_dir=TRAIN_DATA_PATH,
-        image_set='val',
-        transform=val_transform
-    )
-    
-    test_dataset = VOCDataset(
-        root_dir=TEST_DATA_PATH,
-        image_set='test',
-        transform=test_transform,
-        is_test=True
-    )
-    
-    # 创建数据加载器
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-        collate_fn=collate_fn
-    )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-        collate_fn=collate_fn
-    )
-    
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS,
-        pin_memory=True,
-        collate_fn=collate_test_fn
-    )
-    
-    return train_loader, val_loader, test_loader
-
-def collate_fn(batch):
-    """自定义批处理函数，处理不同大小的图像和标注"""
-    images = []
-    targets = []
-    img_ids = []
-    
-    for img, target, img_id in batch:
-        images.append(img)
-        targets.append(target)
-        img_ids.append(img_id)
-    
-    return images, targets, img_ids
-
-def collate_test_fn(batch):
-    """测试集的批处理函数"""
-    images = []
-    img_ids = []
-    orig_sizes = []
-    
-    for img, img_id, orig_size in batch:
-        images.append(img)
-        img_ids.append(img_id)
-        orig_sizes.append(orig_size)
-    
-    images = torch.stack(images, 0)
-    
-    return images, img_ids, orig_sizes
-
-def analyze_dataset():
-    """分析数据集，绘制类别分布等统计图表"""
-    # 统计各类别的样本数量
-    class_counts = {cls: 0 for cls in VOC_CLASSES}
-    
-    # 处理训练集
-    anno_dir = TRAIN_DATA_PATH / "Annotations"
-    for xml_file in tqdm(list(anno_dir.glob("*.xml")), desc="Analyzing dataset"):
-        tree = ET.parse(xml_file)
-        root = tree.getroot()
-        
-        for obj in root.findall('object'):
-            name = obj.find('name').text
-            if name in class_counts:
-                class_counts[name] += 1
-    
-    # 绘制类别分布条形图
-    plt.figure(figsize=(14, 7))
-    classes = list(class_counts.keys())
-    counts = list(class_counts.values())
-    
-    plt.bar(classes, counts, color='skyblue')
-    plt.xticks(rotation=45, ha='right')
-    plt.xlabel('类别', fontsize=12)
-    plt.ylabel('样本数量', fontsize=12)
-    plt.title('VOC2007训练集中各类别样本分布', fontsize=14)
     plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'class_distribution.png'), dpi=300)
     
-    # 确保目录存在
-    os.makedirs(VISUALIZATION_PATH, exist_ok=True)
-    plt.savefig(str(VISUALIZATION_PATH / "class_distribution.png"))
-    
-    # 分析边界框大小分布
-    box_areas = []
-    box_aspects = []
-    
-    for xml_file in tqdm(list(anno_dir.glob("*.xml")), desc="Analyzing bounding boxes"):
-        tree = ET.parse(xml_file)
-        root = tree.getroot()
-        
-        width = float(root.find('size/width').text)
-        height = float(root.find('size/height').text)
-        
-        for obj in root.findall('object'):
-            bbox = obj.find('bndbox')
-            xmin = float(bbox.find('xmin').text)
-            ymin = float(bbox.find('ymin').text)
-            xmax = float(bbox.find('xmax').text)
-            ymax = float(bbox.find('ymax').text)
-            
-            # 计算相对面积和宽高比
-            box_width = (xmax - xmin) / width
-            box_height = (ymax - ymin) / height
-            area = box_width * box_height
-            aspect = box_width / box_height if box_height > 0 else 0
-            
-            box_areas.append(area)
-            box_aspects.append(aspect)
-    
-    # 绘制边界框面积直方图
+    # 2. 各子集样本数量
     plt.figure(figsize=(10, 6))
-    plt.hist(box_areas, bins=50, alpha=0.75, color='blue')
-    plt.xlabel('相对边界框面积', fontsize=12)
-    plt.ylabel('数量', fontsize=12)
-    plt.title('边界框相对面积分布', fontsize=14)
+    subsets = ['train', 'val', 'test']
+    sample_counts = [sum(class_stats[subset].values()) for subset in subsets]
+    
+    plt.bar(subsets, sample_counts, color=['blue', 'green', 'orange'])
+    for i, count in enumerate(sample_counts):
+        plt.text(i, count + 10, str(count), ha='center', fontproperties=font)
+    
+    plt.title('各子集样本数量统计', fontproperties=font)
+    plt.ylabel('样本数量', fontproperties=font)
+    plt.savefig(os.path.join(output_dir, 'sample_counts.png'), dpi=300)
+    
+    # 3. 各类别在各子集中的分布
+    plt.figure(figsize=(14, 8))
+    
+    all_classes = set()
+    for subset in subsets:
+        all_classes.update(class_stats[subset].keys())
+    
+    all_classes = sorted(list(all_classes))
+    subset_colors = ['#3498db', '#2ecc71', '#e74c3c']
+    
+    bar_width = 0.25
+    index = np.arange(len(all_classes))
+    
+    for i, subset in enumerate(subsets):
+        counts = [class_stats[subset].get(cls, 0) for cls in all_classes]
+        plt.bar(index + i*bar_width, counts, bar_width, 
+                label=subset, color=subset_colors[i])
+    
+    plt.xlabel('类别', fontproperties=font)
+    plt.ylabel('数量', fontproperties=font)
+    plt.title('各类别在不同子集中的分布', fontproperties=font)
+    plt.xticks(index + bar_width, all_classes, rotation=45, fontproperties=font)
+    plt.legend(prop=font)
     plt.tight_layout()
-    plt.savefig(str(VISUALIZATION_PATH / "bbox_area_distribution.png"))
+    plt.savefig(os.path.join(output_dir, 'class_distribution_by_subset.png'), dpi=300)
     
-    # 绘制边界框宽高比直方图
-    plt.figure(figsize=(10, 6))
-    plt.hist(box_aspects, bins=50, alpha=0.75, color='green')
-    plt.xlabel('边界框宽高比', fontsize=12)
-    plt.ylabel('数量', fontsize=12)
-    plt.title('边界框宽高比分布', fontsize=14)
-    plt.tight_layout()
-    plt.savefig(str(VISUALIZATION_PATH / "bbox_aspect_distribution.png"))
+    # 4. 图像尺寸分布
+    plt.figure(figsize=(15, 5))
     
-    print(f"分析完成，图表已保存到 {VISUALIZATION_PATH}")
-
-def visualize_augmented_samples(dataset, num_samples=10, save_dir=None):
-    """可视化数据增强样本"""
-    if save_dir is None:
-        save_dir = VISUALIZATION_PATH / "augmented_samples"
-    
-    os.makedirs(save_dir, exist_ok=True)
-    
-    indices = np.random.choice(len(dataset), num_samples, replace=False)
-    
-    for i, idx in enumerate(indices):
-        img, target, img_id = dataset[idx]
-        
-        # 将tensor转换为numpy数组以便可视化
-        if isinstance(img, torch.Tensor):
-            img_np = img.permute(1, 2, 0).numpy()
-            # 去标准化
-            mean = np.array([0.485, 0.456, 0.406])
-            std = np.array([0.229, 0.224, 0.225])
-            img_np = std * img_np + mean
-            img_np = np.clip(img_np, 0, 1)
-        else:
-            img_np = img
-        
-        # 创建带有边界框的图像
-        plt.figure(figsize=(10, 10))
-        plt.imshow(img_np)
-        
-        # 绘制边界框
-        if 'boxes' in target and len(target['boxes']) > 0:
-            height, width = img_np.shape[:2]
-            boxes = target['boxes'].numpy()
-            labels = target['labels'].numpy()
+    for i, subset in enumerate(subsets):
+        plt.subplot(1, 3, i+1)
+        if not image_sizes[subset]:
+            plt.text(0.5, 0.5, f"无{subset}数据", 
+                     horizontalalignment='center', verticalalignment='center')
+            continue
             
-            for box, label in zip(boxes, labels):
-                # YOLO格式: x_center, y_center, width, height
-                x_center, y_center, box_width, box_height = box
+        widths = [size[0] for size in image_sizes[subset]]
+        heights = [size[1] for size in image_sizes[subset]]
+        
+        plt.scatter(widths, heights, alpha=0.5)
+        plt.title(f"{subset}集图像尺寸分布", fontproperties=font)
+        plt.xlabel('宽度', fontproperties=font)
+        plt.ylabel('高度', fontproperties=font)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'image_size_distribution.png'), dpi=300)
+    
+    logger.info(f"数据集统计可视化已保存到: {output_dir}")
+
+# 分析对象尺寸分布
+def analyze_object_sizes(data_dir):
+    subsets = ['train', 'val', 'test']
+    object_sizes = {subset: [] for subset in subsets}
+    
+    for subset in subsets:
+        anno_dir = os.path.join(data_dir, 'insects', subset, 'annotations')
+        xml_files = [f for f in os.listdir(anno_dir) if f.endswith('.xml')]
+        
+        for xml_file in xml_files:
+            xml_path = os.path.join(anno_dir, xml_file)
+            try:
+                data = parse_xml(xml_path)
+                for obj in data['objects']:
+                    bbox = obj['bbox']
+                    width = bbox[2] - bbox[0]
+                    height = bbox[3] - bbox[1]
+                    area = width * height
+                    object_sizes[subset].append({
+                        'class': obj['name'],
+                        'width': width,
+                        'height': height,
+                        'area': area,
+                        'aspect_ratio': width / height
+                    })
+            except Exception as e:
+                logger.error(f"分析{xml_file}目标尺寸时出错: {e}")
+    
+    return object_sizes
+
+# 可视化对象尺寸分布
+def visualize_object_sizes(object_sizes, output_dir):
+    font = FontProperties(fname=r"C:\Windows\Fonts\simhei.ttf", size=12)
+    
+    for subset in object_sizes:
+        if not object_sizes[subset]:
+            continue
+            
+        df = pd.DataFrame(object_sizes[subset])
+        
+        # 1. 目标面积分布
+        plt.figure(figsize=(10, 6))
+        plt.hist(df['area'], bins=30)
+        plt.title(f"{subset}集目标面积分布", fontproperties=font)
+        plt.xlabel('面积（像素）', fontproperties=font)
+        plt.ylabel('频率', fontproperties=font)
+        plt.savefig(os.path.join(output_dir, f'{subset}_object_area_distribution.png'), dpi=300)
+        
+        # 2. 宽高比分布
+        plt.figure(figsize=(10, 6))
+        plt.hist(df['aspect_ratio'], bins=30)
+        plt.title(f"{subset}集目标宽高比分布", fontproperties=font)
+        plt.xlabel('宽高比', fontproperties=font)
+        plt.ylabel('频率', fontproperties=font)
+        plt.savefig(os.path.join(output_dir, f'{subset}_object_aspect_ratio.png'), dpi=300)
+        
+        # 3. 按类别划分的目标尺寸散点图
+        plt.figure(figsize=(12, 8))
+        classes = df['class'].unique()
+        colors = plt.cm.tab10(np.linspace(0, 1, len(classes)))
+        
+        for i, cls in enumerate(classes):
+            mask = df['class'] == cls
+            plt.scatter(df.loc[mask, 'width'], df.loc[mask, 'height'], 
+                       label=cls, color=colors[i], alpha=0.7)
+        
+        plt.title(f"{subset}集不同类别目标尺寸分布", fontproperties=font)
+        plt.xlabel('宽度（像素）', fontproperties=font)
+        plt.ylabel('高度（像素）', fontproperties=font)
+        plt.legend(prop=font)
+        plt.savefig(os.path.join(output_dir, f'{subset}_object_size_by_class.png'), dpi=300)
+    
+    logger.info(f"目标尺寸分析可视化已保存到: {output_dir}")
+
+# 可视化一些样本图像和标注框
+def visualize_samples(data_dir, yolo_dir, class_names, output_dir, num_samples=5):
+    font = FontProperties(fname=r"C:\Windows\Fonts\simhei.ttf", size=12)
+    subsets = ['train', 'val', 'test']
+    
+    class_to_id = {name: i for i, name in enumerate(class_names)}
+    id_to_class = {i: name for i, name in enumerate(class_names)}
+    
+    for subset in subsets:
+        img_dir = os.path.join(data_dir, 'insects', subset, 'images')
+        anno_dir = os.path.join(data_dir, 'insects', subset, 'annotations')
+        
+        # 获取所有有效的图像文件
+        img_files = [f for f in os.listdir(img_dir) if f.endswith(('.jpg', '.jpeg', '.png'))]
+        
+        if not img_files:
+            continue
+        
+        # 随机选择样本
+        samples = np.random.choice(img_files, min(num_samples, len(img_files)), replace=False)
+        
+        for i, img_file in enumerate(samples):
+            img_path = os.path.join(img_dir, img_file)
+            xml_file = os.path.splitext(img_file)[0] + '.xml'
+            xml_path = os.path.join(anno_dir, xml_file)
+            
+            if not os.path.exists(xml_path):
+                continue
+            
+            # 读取图像
+            img = cv2.imread(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            
+            # 解析XML
+            data = parse_xml(xml_path)
+            
+            plt.figure(figsize=(10, 8))
+            plt.imshow(img)
+            
+            # 绘制边界框
+            for obj in data['objects']:
+                if obj['name'] not in class_to_id:
+                    continue
+                    
+                xmin, ymin, xmax, ymax = obj['bbox']
                 
-                # 计算左上角和右下角坐标
-                x1 = int((x_center - box_width / 2) * width)
-                y1 = int((y_center - box_height / 2) * height)
-                x2 = int((x_center + box_width / 2) * width)
-                y2 = int((y_center + box_height / 2) * height)
-                
-                # 绘制矩形框
-                rect = plt.Rectangle((x1, y1), x2 - x1, y2 - y1, 
-                                    fill=False, edgecolor='red', linewidth=2)
+                # 创建矩形
+                rect = plt.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin, 
+                                     linewidth=2, edgecolor='r', facecolor='none')
                 plt.gca().add_patch(rect)
                 
-                # 添加类别标签
-                class_name = VOC_CLASSES[label]
-                plt.text(x1, y1 - 5, class_name, color='white', 
-                        backgroundcolor='red', fontsize=10)
-        
-        plt.title(f"增强后的样本 - ID: {img_id}")
-        plt.axis('off')
-        plt.tight_layout()
-        plt.savefig(str(save_dir / f"augmented_{img_id}.png"))
-        plt.close()
+                # 添加标签
+                plt.text(xmin, ymin - 5, obj['name'], color='r', fontproperties=font,
+                         bbox=dict(facecolor='white', alpha=0.7))
+            
+            plt.title(f"{subset}集样本 - {img_file}", fontproperties=font)
+            plt.axis('off')
+            plt.tight_layout()
+            plt.savefig(os.path.join(output_dir, f'{subset}_sample_{i+1}.png'), dpi=300)
+            plt.close()
     
-    print(f"增强样本可视化已保存到: {save_dir}")
+    logger.info(f"样本可视化已保存到: {output_dir}")
 
-def save_augmented_dataset(dataset, output_dir, num_samples=None):
-    """保存增强后的数据集到磁盘"""
-    # 创建输出目录
-    images_dir = Path(output_dir) / "images"
-    labels_dir = Path(output_dir) / "labels"
-    os.makedirs(images_dir, exist_ok=True)
-    os.makedirs(labels_dir, exist_ok=True)
+def main():
+    # 设置数据路径
+    data_dir = os.path.join('..', '..', 'data')
+    yolo_dir = os.path.join('..', 'data', 'yolo_format')
+    output_dir = os.path.join('..', 'results', 'visualizations', 'dataset')
     
-    # 确定要处理的样本数量
-    if num_samples is None:
-        num_samples = len(dataset)
-    else:
-        num_samples = min(num_samples, len(dataset))
-        
-    # 创建进度条
-    pbar = tqdm(range(num_samples), desc="Saving augmented dataset")
+    # 创建必要的目录
+    create_directories()
     
-    for idx in pbar:
-        img, target, img_id = dataset[idx]
+    # 获取所有类别
+    class_names = set()
+    for subset in ['train', 'val', 'test']:
+        anno_dir = os.path.join(data_dir, 'insects', subset, 'annotations')
         
-        # 将tensor转换为PIL图像以保存
-        if isinstance(img, torch.Tensor):
-            img_np = img.permute(1, 2, 0).numpy()
-            # 去标准化
-            mean = np.array([0.485, 0.456, 0.406])
-            std = np.array([0.229, 0.224, 0.225])
-            img_np = std * img_np + mean
-            img_np = np.clip(img_np * 255, 0, 255).astype(np.uint8)
-            img_pil = Image.fromarray(img_np)
-        else:
-            img_pil = Image.fromarray(img)
+        if not os.path.exists(anno_dir):
+            logger.warning(f"注释目录不存在: {anno_dir}")
+            continue
+            
+        xml_files = [f for f in os.listdir(anno_dir) if f.endswith('.xml')]
         
-        # 保存图像
-        img_path = images_dir / f"{img_id}_aug.jpg"
-        img_pil.save(img_path)
-        
-        # 保存标签（YOLO格式）
-        label_path = labels_dir / f"{img_id}_aug.txt"
-        with open(label_path, 'w') as f:
-            if 'boxes' in target and len(target['boxes']) > 0:
-                boxes = target['boxes'].numpy()
-                labels = target['labels'].numpy()
-                
-                for box, label in zip(boxes, labels):
-                    # YOLO格式: class x_center y_center width height
-                    f.write(f"{label} {box[0]} {box[1]} {box[2]} {box[3]}\n")
+        for xml_file in xml_files:
+            xml_path = os.path.join(anno_dir, xml_file)
+            try:
+                data = parse_xml(xml_path)
+                for obj in data['objects']:
+                    class_names.add(obj['name'])
+            except Exception as e:
+                logger.error(f"解析XML文件{xml_file}时出错: {e}")
     
-    print(f"增强数据集已保存到: {output_dir}")
-    print(f"保存了 {num_samples} 个增强样本")
-
-# 添加一个实用函数来检查Albumentations参数
-def check_albumentations_version():
-    """检查Albumentations版本及参数兼容性"""
-    print(f"Albumentations版本: {A.__version__}")
-    try:
-        # 尝试创建RandomResizedCrop
-        transform = A.RandomResizedCrop(size=(640, 640))
-        print("使用 size=(height, width) 参数成功")
-        return "size"
-    except:
-        try:
-            transform = A.RandomResizedCrop(height=640, width=640)
-            print("使用 height, width 参数成功")
-            return "height_width"
-        except:
-            print("无法确定正确的参数格式，请检查Albumentations版本")
-            return None
+    class_names = sorted(list(class_names))
+    class_mapping = {name: i for i, name in enumerate(class_names)}
+    
+    logger.info(f"检测到 {len(class_names)} 个类别: {class_names}")
+    
+    # 转换数据集
+    class_stats, image_sizes = convert_dataset_to_yolo(data_dir, yolo_dir, class_mapping)
+    
+    # 生成YOLO配置文件
+    generate_yolo_config(yolo_dir, class_names)
+    
+    # 可视化数据集统计
+    visualize_dataset_stats(class_stats, image_sizes, output_dir)
+    
+    # 分析并可视化对象尺寸
+    object_sizes = analyze_object_sizes(data_dir)
+    visualize_object_sizes(object_sizes, output_dir)
+    
+    # 可视化样本
+    visualize_samples(data_dir, yolo_dir, class_names, output_dir)
+    
+    logger.info("数据预处理完成")
 
 if __name__ == "__main__":
-    # 检查Albumentations版本
-    param_format = check_albumentations_version()
-    
-    # 分析数据集并生成可视化图表
-    analyze_dataset()
-    
-    # 获取数据加载器
-    train_loader, val_loader, test_loader = create_data_loaders()
-    print(f"训练集样本数: {len(train_loader.dataset)}")
-    print(f"验证集样本数: {len(val_loader.dataset)}")
-    print(f"测试集样本数: {len(test_loader.dataset)}")
-    
-    # 可视化一些增强后的样本
-    visualize_augmented_samples(train_loader.dataset, num_samples=10)
-    
-    # 是否要保存整个增强数据集
-    save_full_dataset = True  # 设置为True可保存全部增强数据集
-    if save_full_dataset:
-        augmented_dataset_dir = VISUALIZATION_PATH / "augmented_dataset"
-        save_augmented_dataset(
-            train_loader.dataset, 
-            augmented_dataset_dir,
-            num_samples=100  # 限制为100个样本，设为None保存全部
-        )
+    main()
+````
 
+### 2. 数据增强脚本
 
-    import torch
+````python
+import os
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.font_manager import FontProperties
+import random
+import shutil
+from tqdm import tqdm
+import logging
+import torch
+from PIL import Image, ImageEnhance, ImageOps
+import albumentations as A
+import yaml
+from pathlib import Path
+import matplotlib.patches as patches
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join('..', 'results', 'logs', 'data_augmentation.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+# 确保目录存在
+def ensure_dir(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+# 读取YOLO格式数据配置
+def read_data_config(config_path):
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+# 读取YOLO格式标签
+def read_yolo_label(label_path):
+    boxes = []
+    if os.path.exists(label_path):
+        with open(label_path, 'r') as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) == 5:
+                    cls_id = int(parts[0])
+                    x_center, y_center, width, height = map(float, parts[1:5])
+                    boxes.append((cls_id, x_center, y_center, width, height))
+    return boxes
+
+# 将YOLO格式标签转回像素坐标
+def yolo_to_pixel(box, img_width, img_height):
+    cls_id, x_center, y_center, width, height = box
+    
+    x_center *= img_width
+    y_center *= img_height
+    width *= img_width
+    height *= img_height
+    
+    xmin = x_center - width / 2
+    ymin = y_center - height / 2
+    xmax = x_center + width / 2
+    ymax = y_center + height / 2
+    
+    return cls_id, (xmin, ymin, xmax, ymax)
+
+# 将像素坐标转回YOLO格式
+def pixel_to_yolo(cls_id, bbox, img_width, img_height):
+    xmin, ymin, xmax, ymax = bbox
+    
+    x_center = (xmin + xmax) / 2.0
+    y_center = (ymin + ymax) / 2.0
+    width = xmax - xmin
+    height = ymax - ymin
+    
+    # 归一化
+    x_center /= img_width
+    y_center /= img_height
+    width /= img_width
+    height /= img_height
+    
+    return (cls_id, x_center, y_center, width, height)
+
+# 应用Albumentations数据增强
+def apply_augmentation(image, boxes, aug_pipeline):
+    # 将YOLO格式转换为Albumentations格式
+    height, width = image.shape[:2]
+    albu_boxes = []
+    class_ids = []
+    
+    for box in boxes:
+        cls_id, bbox = yolo_to_pixel(box, width, height)
+        xmin, ymin, xmax, ymax = bbox
+        albu_boxes.append([xmin, ymin, xmax, ymax])
+        class_ids.append(cls_id)
+    
+    # 应用增强
+    transformed = aug_pipeline(image=image, bboxes=albu_boxes, class_ids=class_ids)
+    
+    # 转回YOLO格式
+    transformed_image = transformed['image']
+    transformed_boxes = []
+    
+    for idx, (box, cls_id) in enumerate(zip(transformed['bboxes'], transformed['class_ids'])):
+        xmin, ymin, xmax, ymax = box
+        transformed_box = pixel_to_yolo(cls_id, (xmin, ymin, xmax, ymax), 
+                                         transformed_image.shape[1], transformed_image.shape[0])
+        transformed_boxes.append(transformed_box)
+    
+    return transformed_image, transformed_boxes
+
+# 创建高级数据增强流水线
+def create_augmentation_pipelines():
+    # 1. 光照和颜色增强
+    color_aug = A.Compose([
+        A.OneOf([
+            A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.7),
+            A.HueSaturationValue(hue_shift_limit=20, sat_shift_limit=30, val_shift_limit=20, p=0.7),
+            A.CLAHE(clip_limit=4.0, p=0.5),
+        ], p=1.0),
+        A.GaussNoise(var_limit=(10, 50), p=0.2),
+        A.ImageCompression(quality_lower=85, quality_upper=100, p=0.2),
+    ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_ids']))
+    
+    # 2. 几何变换
+    geometry_aug = A.Compose([
+        A.OneOf([
+            A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.15, rotate_limit=15, p=0.7),
+            A.Affine(scale=(0.8, 1.2), translate_percent=(-0.15, 0.15), rotate=(-15, 15), p=0.7),
+        ], p=1.0),
+        A.OneOf([
+            A.RandomCrop(height=900, width=900, p=0.3),
+            A.RandomResizedCrop(height=1024, width=1024, scale=(0.8, 1.0), p=0.3),
+        ], p=0.6),
+        A.HorizontalFlip(p=0.5),
+        A.VerticalFlip(p=0.3),
+    ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_ids']))
+    
+    # 3. 混合增强
+    mixed_aug = A.Compose([
+        A.RandomBrightnessContrast(brightness_limit=0.2, contrast_limit=0.2, p=0.5),
+        A.HueSaturationValue(hue_shift_limit=15, sat_shift_limit=25, val_shift_limit=15, p=0.5),
+        A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=10, p=0.5),
+        A.HorizontalFlip(p=0.5),
+        A.OneOf([
+            A.GaussianBlur(blur_limit=(3, 7), p=0.5),
+            A.MotionBlur(blur_limit=7, p=0.5),
+        ], p=0.3),
+        A.RandomShadow(p=0.2),
+        A.RandomFog(p=0.1),
+    ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_ids']))
+    
+    # 4. 目标检测特定增强
+    detection_aug = A.Compose([
+        A.OneOf([
+            A.RandomSizedBBoxSafeCrop(height=900, width=900, p=0.7),
+            A.RandomResizedCrop(height=1024, width=1024, scale=(0.8, 1.0), p=0.3),
+        ], p=0.8),
+        A.HorizontalFlip(p=0.5),
+        A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
+        A.ToGray(p=0.1),
+        A.GaussNoise(var_limit=(10, 30), p=0.2),
+        A.Blur(blur_limit=3, p=0.1),
+    ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_ids']))
+    
+    # 5. 小目标增强专用
+    small_object_aug = A.Compose([
+        A.OneOf([
+            A.RandomScale(scale_limit=(0.1, 0.3), p=0.7),
+            A.RandomSizedBBoxSafeCrop(height=800, width=800, p=0.7),
+        ], p=0.8),
+        A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.15, rotate_limit=10, p=0.7),
+        A.CLAHE(clip_limit=3.0, p=0.5),
+        A.HorizontalFlip(p=0.5),
+        A.VerticalFlip(p=0.3),
+    ], bbox_params=A.BboxParams(format='pascal_voc', label_fields=['class_ids']))
+    
+    return {
+        'color': color_aug,
+        'geometry': geometry_aug,
+        'mixed': mixed_aug,
+        'detection': detection_aug,
+        'small_object': small_object_aug
+    }
+
+# 应用数据增强并创建增强后的数据集
+def augment_dataset(data_dir, output_dir, class_names, aug_factor=2):
+    # 读取原始训练集
+    train_images_dir = os.path.join(data_dir, 'train', 'images')
+    train_labels_dir = os.path.join(data_dir, 'train', 'labels')
+    
+    # 创建输出目录
+    augmented_images_dir = os.path.join(output_dir, 'train', 'images')
+    augmented_labels_dir = os.path.join(output_dir, 'train', 'labels')
+    ensure_dir(augmented_images_dir)
+    ensure_dir(augmented_labels_dir)
+    
+    # 复制验证集和测试集
+    for subset in ['val', 'test']:
+        src_images_dir = os.path.join(data_dir, subset, 'images')
+        src_labels_dir = os.path.join(data_dir, subset, 'labels')
+        dst_images_dir = os.path.join(output_dir, subset, 'images')
+        dst_labels_dir = os.path.join(output_dir, subset, 'labels')
+        
+        ensure_dir(dst_images_dir)
+        ensure_dir(dst_labels_dir)
+        
+        # 复制图像和标签
+        for filename in os.listdir(src_images_dir):
+            shutil.copy(os.path.join(src_images_dir, filename), 
+                        os.path.join(dst_images_dir, filename))
+        
+        for filename in os.listdir(src_labels_dir):
+            shutil.copy(os.path.join(src_labels_dir, filename), 
+                        os.path.join(dst_labels_dir, filename))
+    
+    # 创建增强流水线
+    aug_pipelines = create_augmentation_pipelines()
+    
+    # 获取所有原始训练图像
+    train_images = [f for f in os.listdir(train_images_dir) 
+                    if f.endswith(('.jpg', '.jpeg', '.png'))]
+    
+    # 首先复制原始图像和标签
+    for filename in train_images:
+        # 复制原始图像
+        shutil.copy(os.path.join(train_images_dir, filename), 
+                    os.path.join(augmented_images_dir, filename))
+        
+        # 复制原始标签
+        label_filename = os.path.splitext(filename)[0] + '.txt'
+        if os.path.exists(os.path.join(train_labels_dir, label_filename)):
+            shutil.copy(os.path.join(train_labels_dir, label_filename), 
+                        os.path.join(augmented_labels_dir, label_filename))
+    
+    # 分析每个类别的实例数量
+    class_counts = {i: 0 for i in range(len(class_names))}
+    for filename in train_images:
+        label_filename = os.path.splitext(filename)[0] + '.txt'
+        label_path = os.path.join(train_labels_dir, label_filename)
+        if os.path.exists(label_path):
+            boxes = read_yolo_label(label_path)
+            for box in boxes:
+                cls_id = box[0]
+                class_counts[cls_id] += 1
+    
+    # 计算类别平衡权重
+    max_count = max(class_counts.values())
+    class_weights = {cls_id: max(1.0, min(3.0, max_count / count)) if count > 0 else 1.0 
+                     for cls_id, count in class_counts.items()}
+    
+    logger.info(f"类别权重: {class_weights}")
+    
+    # 增强过程中的统计信息
+    aug_stats = {
+        'original': len(train_images),
+        'augmented': 0,
+        'by_class': {cls_id: 0 for cls_id in range(len(class_names))},
+        'by_technique': {name: 0 for name in aug_pipelines}
+    }
+    
+    # 对每张图像进行增强
+    for filename in tqdm(train_images, desc="增强训练集"):
+        # 读取图像和标签
+        img_path = os.path.join(train_images_dir, filename)
+        label_filename = os.path.splitext(filename)[0] + '.txt'
+        label_path = os.path.join(train_labels_dir, label_filename)
+        
+        if not os.path.exists(label_path):
+            continue
+            
+        image = cv2.imread(img_path)
+        if image is None:
+            logger.warning(f"无法读取图像: {img_path}")
+            continue
+            
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        boxes = read_yolo_label(label_path)
+        
+        if not boxes:
+            continue
+        
+        # 确定要应用的增强数量（基于类别平衡）
+        classes_in_image = set(box[0] for box in boxes)
+        max_weight = max(class_weights[cls_id] for cls_id in classes_in_image)
+        num_augs = max(1, min(aug_factor, int(max_weight * 2)))
+        
+        # 应用增强
+        for i in range(num_augs):
+            # 选择增强类型
+            aug_type = random.choice(list(aug_pipelines.keys()))
+            aug_pipeline = aug_pipelines[aug_type]
+            
+            try:
+                # 应用增强
+                aug_image, aug_boxes = apply_augmentation(image, boxes, aug_pipeline)
+                
+                if not aug_boxes:
+                    continue
+                
+                # 保存增强后的图像和标签
+                aug_filename = f"{os.path.splitext(filename)[0]}_aug_{aug_type}_{i+1}{os.path.splitext(filename)[1]}"
+                aug_img_path = os.path.join(augmented_images_dir, aug_filename)
+                aug_label_filename = f"{os.path.splitext(filename)[0]}_aug_{aug_type}_{i+1}.txt"
+                aug_label_path = os.path.join(augmented_labels_dir, aug_label_filename)
+                
+                # 保存图像
+                cv2.imwrite(aug_img_path, cv2.cvtColor(aug_image, cv2.COLOR_RGB2BGR))
+                
+                # 保存标签
+                with open(aug_label_path, 'w') as f:
+                    for box in aug_boxes:
+                        cls_id, x_center, y_center, width, height = box
+                        f.write(f"{cls_id} {x_center} {y_center} {width} {height}\n")
+                        aug_stats['by_class'][cls_id] += 1
+                
+                aug_stats['augmented'] += 1
+                aug_stats['by_technique'][aug_type] += 1
+                
+            except Exception as e:
+                logger.error(f"增强图像 {filename} 时出错: {e}")
+    
+    # 将增强统计信息保存为图表
+    visualize_augmentation_stats(aug_stats, class_names, os.path.join('..', 'results', 'visualizations'))
+    
+    logger.info(f"数据增强完成。原始图像: {aug_stats['original']}, 增强图像: {aug_stats['augmented']}")
+    
+    # 更新数据配置文件
+    data_config_path = os.path.join(data_dir, 'data.yaml')
+    augmented_config_path = os.path.join(output_dir, 'data.yaml')
+    
+    if os.path.exists(data_config_path):
+        config = read_data_config(data_config_path)
+        config['train'] = os.path.join(output_dir, 'train', 'images')
+        config['val'] = os.path.join(output_dir, 'val', 'images')
+        config['test'] = os.path.join(output_dir, 'test', 'images')
+        
+        with open(augmented_config_path, 'w') as f:
+            yaml.dump(config, f)
+    
+    return augmented_config_path, aug_stats
+
+# 可视化数据增强统计信息
+def visualize_augmentation_stats(aug_stats, class_names, output_dir):
+    font = FontProperties(fname=r"C:\Windows\Fonts\simhei.ttf", size=12)
+    
+    # 1. 原始vs增强图像数量
+    plt.figure(figsize=(8, 6))
+    counts = [aug_stats['original'], aug_stats['augmented']]
+    labels = ['原始图像', '增强图像']
+    colors = ['#3498db', '#e74c3c']
+    
+    plt.bar(labels, counts, color=colors)
+    for i, count in enumerate(counts):
+        plt.text(i, count + 10, str(count), ha='center', fontproperties=font)
+    
+    plt.title('原始与增强后图像数量对比', fontproperties=font)
+    plt.ylabel('图像数量', fontproperties=font)
+    plt.savefig(os.path.join(output_dir, 'augmentation_image_counts.png'), dpi=300)
+    
+    # 2. 各类别增强数量
+    plt.figure(figsize=(12, 6))
+    classes = [class_names[i] for i in range(len(class_names))]
+    counts = [aug_stats['by_class'][i] for i in range(len(class_names))]
+    
+    plt.bar(classes, counts, color='#2ecc71')
+    for i, count in enumerate(counts):
+        plt.text(i, count + 5, str(count), ha='center', fontproperties=font)
+    
+    plt.title('各类别增强实例数量', fontproperties=font)
+    plt.ylabel('实例数量', fontproperties=font)
+    plt.xticks(rotation=45, fontproperties=font)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'augmentation_by_class.png'), dpi=300)
+    
+    # 3. 各增强技术使用次数
+    plt.figure(figsize=(10, 6))
+    techniques = list(aug_stats['by_technique'].keys())
+    counts = list(aug_stats['by_technique'].values())
+    
+    plt.bar(techniques, counts, color='#9b59b6')
+    for i, count in enumerate(counts):
+        plt.text(i, count + 5, str(count), ha='center', fontproperties=font)
+    
+    plt.title('各增强技术使用次数', fontproperties=font)
+    plt.ylabel('使用次数', fontproperties=font)
+    plt.xticks(rotation=45, fontproperties=font)
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'augmentation_by_technique.png'), dpi=300)
+    
+    logger.info(f"增强统计可视化已保存到: {output_dir}")
+
+# 可视化增强效果示例
+def visualize_augmentation_examples(data_dir, aug_dir, class_names, output_dir, num_examples=3):
+    font = FontProperties(fname=r"C:\Windows\Fonts\simhei.ttf", size=12)
+    
+    # 获取原始图像
+    train_images_dir = os.path.join(data_dir, 'train', 'images')
+    train_labels_dir = os.path.join(data_dir, 'train', 'labels')
+    
+    # 获取增强后的图像
+    aug_images_dir = os.path.join(aug_dir, 'train', 'images')
+    aug_labels_dir = os.path.join(aug_dir, 'train', 'labels')
+    
+    # 查找包含"aug"的文件名
+    aug_files = [f for f in os.listdir(aug_images_dir) if 'aug' in f]
+    
+    # 随机选择几个增强后的图像
+    if not aug_files:
+        logger.warning("没有找到增强图像")
+        return
+        
+    selected_aug_files = random.sample(aug_files, min(num_examples, len(aug_files)))
+    
+    # 对于每个增强图像，找到其原始图像
+    for i, aug_file in enumerate(selected_aug_files):
+        # 获取原始文件名
+        orig_file = aug_file.split('_aug_')[0] + os.path.splitext(aug_file)[1]
+        
+        # 读取原始图像和标签
+        orig_img_path = os.path.join(train_images_dir, orig_file)
+        orig_label_path = os.path.join(train_labels_dir, os.path.splitext(orig_file)[0] + '.txt')
+        
+        # 读取增强图像和标签
+        aug_img_path = os.path.join(aug_images_dir, aug_file)
+        aug_label_path = os.path.join(aug_labels_dir, os.path.splitext(aug_file)[0] + '.txt')
+        
+        if not (os.path.exists(orig_img_path) and os.path.exists(aug_img_path)):
+            continue
+            
+        # 读取图像
+        orig_img = cv2.imread(orig_img_path)
+        aug_img = cv2.imread(aug_img_path)
+        
+        if orig_img is None or aug_img is None:
+            continue
+            
+        orig_img = cv2.cvtColor(orig_img, cv2.COLOR_BGR2RGB)
+        aug_img = cv2.cvtColor(aug_img, cv2.COLOR_BGR2RGB)
+        
+        # 读取标签
+        orig_boxes = read_yolo_label(orig_label_path)
+        aug_boxes = read_yolo_label(aug_label_path)
+        
+        # 创建图表
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+        
+        # 绘制原始图像和边界框
+        ax1.imshow(orig_img)
+        ax1.set_title('原始图像', fontproperties=font)
+        
+        for box in orig_boxes:
+            cls_id, bbox = yolo_to_pixel(box, orig_img.shape[1], orig_img.shape[0])
+            xmin, ymin, xmax, ymax = bbox
+            
+            rect = patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin, 
+                                    linewidth=2, edgecolor='r', facecolor='none')
+            ax1.add_patch(rect)
+            
+            class_name = class_names[cls_id] if cls_id < len(class_names) else f"Class {cls_id}"
+            ax1.text(xmin, ymin - 5, class_name, color='r', fontproperties=font,
+                    bbox=dict(facecolor='white', alpha=0.7))
+        
+        # 绘制增强图像和边界框
+        ax2.imshow(aug_img)
+        aug_type = aug_file.split('_aug_')[1].split('_')[0]
+        ax2.set_title(f'增强图像 ({aug_type})', fontproperties=font)
+        
+        for box in aug_boxes:
+            cls_id, bbox = yolo_to_pixel(box, aug_img.shape[1], aug_img.shape[0])
+            xmin, ymin, xmax, ymax = bbox
+            
+            rect = patches.Rectangle((xmin, ymin), xmax - xmin, ymax - ymin, 
+                                    linewidth=2, edgecolor='r', facecolor='none')
+            ax2.add_patch(rect)
+            
+            class_name = class_names[cls_id] if cls_id < len(class_names) else f"Class {cls_id}"
+            ax2.text(xmin, ymin - 5, class_name, color='r', fontproperties=font,
+                    bbox=dict(facecolor='white', alpha=0.7))
+        
+        ax1.axis('off')
+        ax2.axis('off')
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, f'augmentation_example_{i+1}.png'), dpi=300)
+        plt.close()
+    
+    logger.info(f"增强效果示例已保存到: {output_dir}")
+
+def main():
+    # 设置路径
+    data_dir = os.path.join('..', 'data', 'yolo_format')
+    aug_dir = os.path.join('..', 'data', 'yolo_augmented')
+    output_dir = os.path.join('..', 'results', 'visualizations')
+    
+    # 确保输出目录存在
+    ensure_dir(aug_dir)
+    ensure_dir(os.path.join(aug_dir, 'train', 'images'))
+    ensure_dir(os.path.join(aug_dir, 'train', 'labels'))
+    ensure_dir(os.path.join(aug_dir, 'val', 'images'))
+    ensure_dir(os.path.join(aug_dir, 'val', 'labels'))
+    ensure_dir(os.path.join(aug_dir, 'test', 'images'))
+    ensure_dir(os.path.join(aug_dir, 'test', 'labels'))
+    ensure_dir(output_dir)
+    
+    # 读取数据配置
+    data_config_path = os.path.join(data_dir, 'data.yaml')
+    if not os.path.exists(data_config_path):
+        logger.error(f"数据配置文件不存在: {data_config_path}")
+        return
+        
+    config = read_data_config(data_config_path)
+    class_names = config['names']
+    
+    logger.info(f"开始数据增强，类别: {class_names}")
+    
+    # 执行数据增强
+    augmented_config_path, aug_stats = augment_dataset(data_dir, aug_dir, class_names, aug_factor=3)
+    
+    # 可视化增强效果示例
+    visualize_augmentation_examples(data_dir, aug_dir, class_names, output_dir)
+    
+    logger.info(f"数据增强完成。增强后配置文件: {augmented_config_path}")
+
+if __name__ == "__main__":
+    main()
+````
+
+### 3. 改进的YOLOv10模型
+
+````python
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import timm
-from timm.models.layers import DropPath, to_2tuple
 import math
-from config import *
+import numpy as np
+import yaml
+import logging
+import os
+from typing import List, Tuple
 
-class CBAM(nn.Module):
-    """CBAM注意力机制"""
-    def __init__(self, channel, reduction=16):
-        super(CBAM, self).__init__()
-        # 通道注意力
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Conv2d(channel, channel // reduction, 1, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(channel // reduction, channel, 1, bias=False)
-        )
-        self.sigmoid_channel = nn.Sigmoid()
-        
-        # 空间注意力
-        self.conv_spatial = nn.Conv2d(2, 1, kernel_size=7, stride=1, padding=3)
-        self.sigmoid_spatial = nn.Sigmoid()
-        
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join('..', 'results', 'logs', 'model.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class Conv(nn.Module):
+    """标准卷积模块，包含卷积、批归一化和激活函数"""
+    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding=None, groups=1, act=True):
+        super().__init__()
+        if padding is None:
+            padding = kernel_size // 2
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, groups=groups, bias=False)
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = nn.SiLU() if act else nn.Identity()
+
     def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        return self.act(self.conv(x))
+
+class Bottleneck(nn.Module):
+    """标准瓶颈模块"""
+    def __init__(self, in_channels, out_channels, shortcut=True, expansion=0.5):
+        super().__init__()
+        hidden_channels = int(out_channels * expansion)
+        self.conv1 = Conv(in_channels, hidden_channels, 1, 1)
+        self.conv2 = Conv(hidden_channels, out_channels, 3, 1)
+        self.add = shortcut and in_channels == out_channels
+
+    def forward(self, x):
+        return x + self.conv2(self.conv1(x)) if self.add else self.conv2(self.conv1(x))
+
+class C2f(nn.Module):
+    """CSP瓶颈模块 (Cross Stage Partial) - 高效版本"""
+    def __init__(self, in_channels, out_channels, n=1, shortcut=True, expansion=0.5):
+        super().__init__()
+        self.conv1 = Conv(in_channels, 2 * out_channels, 1, 1)
+        self.conv2 = Conv((2 + n) * out_channels, out_channels, 1, 1)
+        
+        self.blocks = nn.ModuleList([
+            Bottleneck(out_channels, out_channels, shortcut, expansion)
+            for _ in range(n)
+        ])
+
+    def forward(self, x):
+        y = list(self.conv1(x).split((self.conv1.conv.out_channels // 2, self.conv1.conv.out_channels // 2), 1))
+        for i, block in enumerate(self.blocks):
+            y.append(block(y[-1]))
+        
+        # 使用torch.cat而不是列表相加，避免中间内存分配
+        return self.conv2(torch.cat(y, 1))
+
+class SPPF(nn.Module):
+    """空间金字塔池化 - 快速版"""
+    def __init__(self, in_channels, out_channels, kernel_size=5):
+        super().__init__()
+        hidden_channels = in_channels // 2  # 减少通道数以提高效率
+        self.conv1 = Conv(in_channels, hidden_channels, 1, 1)
+        self.conv2 = Conv(hidden_channels * 4, out_channels, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        y1 = self.m(x)
+        y2 = self.m(y1)
+        y3 = self.m(y2)
+        return self.conv2(torch.cat((x, y1, y2, y3), 1))
+
+class FocalAttention(nn.Module):
+    """创新点：Focal注意力机制，增强小目标检测能力"""
+    def __init__(self, channels, reduction=8, spatial_scale=2):
+        super().__init__()
+        self.spatial_scale = spatial_scale  # 控制空间注意力的尺度
+
+        # 通道注意力分支
+        self.channel_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // reduction, 1),
+            nn.SiLU(),
+            nn.Conv2d(channels // reduction, channels, 1),
+            nn.Sigmoid()
+        )
+        
+        # 空间注意力分支
+        self.spatial_gate = nn.Sequential(
+            nn.Conv2d(channels, channels // reduction, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv2d(channels // reduction, 1, kernel_size=7, padding=3),
+            nn.Sigmoid()
+        )
+        
+        # 动态权重
+        self.weight_fc = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, 2, 1),
+            nn.Softmax(dim=1)
+        )
+    
+    def forward(self, x):
+        # 获取动态权重
+        weights = self.weight_fc(x)
+        
         # 通道注意力
-        avg_out = self.fc(self.avg_pool(x))
-        max_out = self.fc(self.max_pool(x))
-        channel_out = self.sigmoid_channel(avg_out + max_out)
+        channel_att = self.channel_gate(x)
+        channel_out = x * channel_att
         
-        x = x * channel_out
+        # 空间注意力 - 采用多尺度处理
+        h, w = x.size(2), x.size(3)
+        # 下采样
+        x_down = F.interpolate(x, size=(h//self.spatial_scale, w//self.spatial_scale), 
+                              mode='bilinear', align_corners=False)
+        spatial_att = self.spatial_gate(x_down)
+        # 上采样回原始尺寸
+        spatial_att = F.interpolate(spatial_att, size=(h, w), mode='bilinear', align_corners=False)
+        spatial_out = x * spatial_att
         
-        # 空间注意力
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        spatial_out = torch.cat([avg_out, max_out], dim=1)
-        spatial_out = self.conv_spatial(spatial_out)
-        spatial_out = self.sigmoid_spatial(spatial_out)
+        # 动态融合
+        out = channel_out * weights[:, 0:1, :, :] + spatial_out * weights[:, 1:, :, :]
         
-        x = x * spatial_out
+        return out
+
+class AdaptiveFeatureFusion(nn.Module):
+    """创新点：自适应特征融合，根据特征重要性动态调整融合权重"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = Conv(in_channels, out_channels, 1, 1)
         
-        return x
+        # 创新点：使用全局和局部特征感知
+        self.global_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(out_channels, out_channels // 8, 1),
+            nn.SiLU(),
+            nn.Conv2d(out_channels // 8, out_channels, 1),
+            nn.Sigmoid()
+        )
+        
+        self.local_gate = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels // 8, 3, 1, 1),
+            nn.SiLU(),
+            nn.Conv2d(out_channels // 8, out_channels, 3, 1, 1),
+            nn.Sigmoid()
+        )
+        
+        # 动态融合权重
+        self.balance = nn.Parameter(torch.ones(1) * 0.5)
+    
+    def forward(self, x):
+        # 特征变换
+        x = self.conv(x)
+        
+        # 全局特征权重
+        global_weights = self.global_gate(x)
+        
+        # 局部特征权重
+        local_weights = self.local_gate(x)
+        
+        # 自适应融合
+        weights = self.balance * global_weights + (1 - self.balance) * local_weights
+        
+        return x * weights
+
+class Detect(nn.Module):
+    """YOLOv10检测头 - 创新点：改进的预测网络和标签分配"""
+    def __init__(self, nc=80, ch=()):
+        super().__init__()
+        self.nc = nc  # 类别数
+        self.nl = len(ch)  # 检测层数
+        self.reg_max = 16  # 分类后回归最大数量
+        self.no = nc + self.reg_max * 4  # 每个锚点的输出数
+        
+        # 创新点：改进的分类和回归头
+        self.cv = nn.ModuleList([nn.Conv2d(ch[i], self.no, # filepath: c:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\scripts\model.py
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import math
+import numpy as np
+import yaml
+import logging
+import os
+from typing import List, Tuple
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join('..', 'results', 'logs', 'model.log')),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+class Conv(nn.Module):
+    """标准卷积模块，包含卷积、批归一化和激活函数"""
+    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding=None, groups=1, act=True):
+        super().__init__()
+        if padding is None:
+            padding = kernel_size // 2
+        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size, stride, padding, groups=groups, bias=False)
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = nn.SiLU() if act else nn.Identity()
+
+    def forward(self, x):
+        return self.act(self.bn(self.conv(x)))
+
+    def forward_fuse(self, x):
+        return self.act(self.conv(x))
+
+class Bottleneck(nn.Module):
+    """标准瓶颈模块"""
+    def __init__(self, in_channels, out_channels, shortcut=True, expansion=0.5):
+        super().__init__()
+        hidden_channels = int(out_channels * expansion)
+        self.conv1 = Conv(in_channels, hidden_channels, 1, 1)
+        self.conv2 = Conv(hidden_channels, out_channels, 3, 1)
+        self.add = shortcut and in_channels == out_channels
+
+    def forward(self, x):
+        return x + self.conv2(self.conv1(x)) if self.add else self.conv2(self.conv1(x))
+
+class C2f(nn.Module):
+    """CSP瓶颈模块 (Cross Stage Partial) - 高效版本"""
+    def __init__(self, in_channels, out_channels, n=1, shortcut=True, expansion=0.5):
+        super().__init__()
+        self.conv1 = Conv(in_channels, 2 * out_channels, 1, 1)
+        self.conv2 = Conv((2 + n) * out_channels, out_channels, 1, 1)
+        
+        self.blocks = nn.ModuleList([
+            Bottleneck(out_channels, out_channels, shortcut, expansion)
+            for _ in range(n)
+        ])
+
+    def forward(self, x):
+        y = list(self.conv1(x).split((self.conv1.conv.out_channels // 2, self.conv1.conv.out_channels // 2), 1))
+        for i, block in enumerate(self.blocks):
+            y.append(block(y[-1]))
+        
+        # 使用torch.cat而不是列表相加，避免中间内存分配
+        return self.conv2(torch.cat(y, 1))
+
+class SPPF(nn.Module):
+    """空间金字塔池化 - 快速版"""
+    def __init__(self, in_channels, out_channels, kernel_size=5):
+        super().__init__()
+        hidden_channels = in_channels // 2  # 减少通道数以提高效率
+        self.conv1 = Conv(in_channels, hidden_channels, 1, 1)
+        self.conv2 = Conv(hidden_channels * 4, out_channels, 1, 1)
+        self.m = nn.MaxPool2d(kernel_size=kernel_size, stride=1, padding=kernel_size // 2)
+
+    def forward(self, x):
+        x = self.conv1(x)
+        y1 = self.m(x)
+        y2 = self.m(y1)
+        y3 = self.m(y2)
+        return self.conv2(torch.cat((x, y1, y2, y3), 1))
+
+class FocalAttention(nn.Module):
+    """创新点：Focal注意力机制，增强小目标检测能力"""
+    def __init__(self, channels, reduction=8, spatial_scale=2):
+        super().__init__()
+        self.spatial_scale = spatial_scale  # 控制空间注意力的尺度
+
+        # 通道注意力分支
+        self.channel_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // reduction, 1),
+            nn.SiLU(),
+            nn.Conv2d(channels // reduction, channels, 1),
+            nn.Sigmoid()
+        )
+        
+        # 空间注意力分支
+        self.spatial_gate = nn.Sequential(
+            nn.Conv2d(channels, channels // reduction, kernel_size=1),
+            nn.SiLU(),
+            nn.Conv2d(channels // reduction, 1, kernel_size=7, padding=3),
+            nn.Sigmoid()
+        )
+        
+        # 动态权重
+        self.weight_fc = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, 2, 1),
+            nn.Softmax(dim=1)
+        )
+    
+    def forward(self, x):
+        # 获取动态权重
+        weights = self.weight_fc(x)
+        
+        # 通道注意力
+        channel_att = self.channel_gate(x)
+        channel_out = x * channel_att
+        
+        # 空间注意力 - 采用多尺度处理
+        h, w = x.size(2), x.size(3)
+        # 下采样
+        x_down = F.interpolate(x, size=(h//self.spatial_scale, w//self.spatial_scale), 
+                              mode='bilinear', align_corners=False)
+        spatial_att = self.spatial_gate(x_down)
+        # 上采样回原始尺寸
+        spatial_att = F.interpolate(spatial_att, size=(h, w), mode='bilinear', align_corners=False)
+        spatial_out = x * spatial_att
+        
+        # 动态融合
+        out = channel_out * weights[:, 0:1, :, :] + spatial_out * weights[:, 1:, :, :]
+        
+        return out
+
+class AdaptiveFeatureFusion(nn.Module):
+    """创新点：自适应特征融合，根据特征重要性动态调整融合权重"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = Conv(in_channels, out_channels, 1, 1)
+        
+        # 创新点：使用全局和局部特征感知
+        self.global_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(out_channels, out_channels // 8, 1),
+            nn.SiLU(),
+            nn.Conv2d(out_channels // 8, out_channels, 1),
+            nn.Sigmoid()
+        )
+        
+        self.local_gate = nn.Sequential(
+            nn.Conv2d(out_channels, out_channels // 8, 3, 1, 1),
+            nn.SiLU(),
+            nn.Conv2d(out_channels // 8, out_channels, 3, 1, 1),
+            nn.Sigmoid()
+        )
+        
+        # 动态融合权重
+        self.balance = nn.Parameter(torch.ones(1) * 0.5)
+    
+    def forward(self, x):
+        # 特征变换
+        x = self.conv(x)
+        
+        # 全局特征权重
+        global_weights = self.global_gate(x)
+        
+        # 局部特征权重
+        local_weights = self.local_gate(x)
+        
+        # 自适应融合
+        weights = self.balance * global_weights + (1 - self.balance) * local_weights
+        
+        return x * weights
+
+class Detect(nn.Module):
+    """YOLOv10检测头 - 创新点：改进的预测网络和标签分配"""
+    def __init__(self, nc=80, ch=()):
+        super().__init__()
+        self.nc = nc  # 类别数
+        self.nl = len(ch)  # 检测层数
+        self.reg_max = 16  # 分类后回归最大数量
+        self.no = nc + self.reg_max * 4  # 每个锚点的输出数
+        
+        # 创新点：改进的分类和回归头
+        self.cv = nn.ModuleList([nn.Conv2d(ch[i], self.no, 
+
+找到具有 3 个许可证类型的类似代码
+
+# 完整的YOLO模型实现代码
+
+下面是剩余的完整脚本，包括改进的YOLOv10模型及训练、评估和可视化代码。
+
+## 3. 改进的YOLOv10模型 (model.py)
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import List, Tuple
 
 class ConvBNSiLU(nn.Module):
-    """标准卷积块，包含Conv+BN+SiLU"""
-    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding=None, groups=1):
+    """标准卷积块：Conv + BatchNorm + SiLU"""
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, groups=1):
         super().__init__()
-        padding = kernel_size // 2 if padding is None else padding
-        
         self.conv = nn.Conv2d(
             in_channels, 
-            out_channels, 
-            kernel_size=kernel_size, 
-            stride=stride, 
-            padding=padding, 
-            groups=groups, 
+            out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            groups=groups,
             bias=False
         )
         self.bn = nn.BatchNorm2d(out_channels)
         self.act = nn.SiLU(inplace=True)
-        
+    
     def forward(self, x):
         return self.act(self.bn(self.conv(x)))
+
+class GhostConv(nn.Module):
+    """Ghost卷积：使用更少的参数生成更多的特征"""
+    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, ratio=2):
+        super().__init__()
+        self.out_channels = out_channels
+        init_channels = out_channels // ratio
+        new_channels = init_channels * (ratio - 1)
+        
+        self.primary_conv = ConvBNSiLU(
+            in_channels, init_channels, kernel_size, stride, kernel_size//2
+        )
+        self.cheap_operation = ConvBNSiLU(
+            init_channels, new_channels, 3, 1, 1, groups=init_channels
+        )
     
-    def forward_fuse(self, x):
-        return self.act(self.conv(x))
-
-class ResidualBlock(nn.Module):
-    """残差块"""
-    def __init__(self, in_channels, out_channels=None):
-        super().__init__()
-        out_channels = in_channels if out_channels is None else out_channels
-        self.conv1 = ConvBNSiLU(in_channels, in_channels // 2, 1)
-        self.conv2 = ConvBNSiLU(in_channels // 2, out_channels, 3)
-        self.use_add = in_channels == out_channels
-        
     def forward(self, x):
-        y = self.conv2(self.conv1(x))
-        if self.use_add:
-            y = y + x
-        return y
+        primary = self.primary_conv(x)
+        cheap = self.cheap_operation(primary)
+        return torch.cat([primary, cheap], dim=1)
 
-class CSPBlock(nn.Module):
-    """CSP模块"""
-    def __init__(self, in_channels, out_channels, num_resblocks=1, add_identity=True):
+class CARAFE(nn.Module):
+    """内容感知上采样模块"""
+    def __init__(self, channels, scale_factor=2, up_kernel=5):
         super().__init__()
-        self.conv1 = ConvBNSiLU(in_channels, out_channels // 2)
-        self.conv2 = ConvBNSiLU(in_channels, out_channels // 2)
+        self.scale_factor = scale_factor
+        self.up_kernel = up_kernel
+        self.kernel_size = up_kernel
+        self.kernel_channels = self.kernel_size * self.kernel_size
         
-        resblock_layers = []
-        for _ in range(num_resblocks):
-            resblock_layers.append(ResidualBlock(out_channels // 2))
-        self.resblocks = nn.Sequential(*resblock_layers)
+        # 编码器网络
+        self.encoder = nn.Sequential(
+            nn.Conv2d(channels, channels, 3, 1, 1),
+            nn.BatchNorm2d(channels),
+            nn.SiLU(inplace=True),
+            nn.Conv2d(channels, self.kernel_channels * scale_factor * scale_factor, 3, 1, 1)
+        )
         
-        if USE_CBAM:
-            self.cbam = CBAM(out_channels)
+        # 初始化权重
+        self._init_weights()
+    
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+    
+    def forward(self, x):
+        b, c, h, w = x.size()
         
-        self.conv3 = ConvBNSiLU(out_channels, out_channels)
-        self.add_identity = add_identity and in_channels == out_channels
+        # 生成卷积核权重
+        kernel_tensor = self.encoder(x)
+        kernel_tensor = kernel_tensor.view(
+            b, self.kernel_size * self.kernel_size, 
+            self.scale_factor * h, self.scale_factor * w
+        )
+        kernel_tensor = F.softmax(kernel_tensor, dim=1)
+        kernel_tensor = kernel_tensor.view(
+            b, self.kernel_size, self.kernel_size, 
+            self.scale_factor * h, self.scale_factor * w
+        )
+        
+        # 上采样输入特征
+        x = F.interpolate(x, scale_factor=self.scale_factor, mode='nearest')
+        
+        # 应用CARAFE操作
+        x_unfolded = F.unfold(
+            x, kernel_size=self.kernel_size, 
+            padding=self.kernel_size//2
+        )
+        x_unfolded = x_unfolded.view(
+            b, c, self.kernel_size * self.kernel_size, 
+            self.scale_factor * h, self.scale_factor * w
+        )
+        
+        # 应用生成的卷积核
+        out = torch.zeros_like(x)
+        for i in range(self.kernel_size):
+            for j in range(self.kernel_size):
+                idx = i * self.kernel_size + j
+                out += x_unfolded[:, :, idx, :, :] * kernel_tensor[:, i, j, :, :].unsqueeze(1)
+        
+        return out
+
+class DyReLU(nn.Module):
+    """动态ReLU激活函数"""
+    def __init__(self, channels, reduction=4, k=2, conv_type='2d'):
+        super().__init__()
+        self.channels = channels
+        self.k = k
+        self.conv_type = conv_type
+        
+        # 注意力机制
+        self.fc1 = nn.Linear(channels, channels // reduction)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(channels // reduction, 2 * k)
+        # 初始化参数
+        self.fc2.bias.data[:k] = 1.0  # 初始化a为1
+        self.fc2.bias.data[k:] = 0.0  # 初始化b为0
+        
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x):
+        if self.conv_type == '2d':
+            batch, channels, height, width = x.size()
+            # 全局平均池化
+            pooled = F.adaptive_avg_pool2d(x, 1).view(batch, channels)
+        else:
+            batch, channels = x.size()
+            pooled = x
+            
+        # 计算通道注意力
+        theta = self.fc1(pooled)
+        theta = self.relu(theta)
+        theta = self.fc2(theta)
+        theta = 2 * self.sigmoid(theta) - 1  # 将值映射到[-1, 1]
+        
+        # 重塑参数
+        a, b = theta[:, :self.k], theta[:, self.k:]
+        
+        if self.conv_type == '2d':
+            a = a.view(batch, self.k, 1, 1)
+            b = b.view(batch, self.k, 1, 1)
+            
+            # 计算动态ReLU
+            out = 0
+            for i in range(self.k):
+                out += torch.clamp(x * a[:, i] + b[:, i], min=0)
+            return out
+        else:
+            a = a.view(batch, self.k, 1)
+            b = b.view(batch, self.k, 1)
+            
+            # 计算动态ReLU
+            x = x.unsqueeze(-1)
+            out = 0
+            for i in range(self.k):
+                out += torch.clamp(x * a[:, i] + b[:, i], min=0)
+            return out.squeeze(-1)
+
+class SEModule(nn.Module):
+    """Squeeze-and-Excitation模块"""
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc1 = nn.Linear(channels, channels // reduction, bias=False)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(channels // reduction, channels, bias=False)
+        self.sigmoid = nn.Sigmoid()
+    
+    def forward(self, x):
+        batch, channels, _, _ = x.size()
+        y = self.avg_pool(x).view(batch, channels)
+        y = self.fc1(y)
+        y = self.relu(y)
+        y = self.fc2(y)
+        y = self.sigmoid(y).view(batch, channels, 1, 1)
+        return x * y.expand_as(x)
+
+class CBAM(nn.Module):
+    """Convolutional Block Attention Module"""
+    def __init__(self, channels, reduction=16):
+        super().__init__()
+        # 通道注意力
+        self.channel_gate = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(channels, channels // reduction, 1, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(channels // reduction, channels, 1, bias=False),
+        )
+        # 空间注意力
+        self.spatial_gate = nn.Sequential(
+            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
+            nn.BatchNorm2d(1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, x):
+        # 通道注意力
+        channel_att = self.channel_gate(x)
+        channel_att = torch.sigmoid(channel_att)
+        x = x * channel_att
+        
+        # 空间注意力
+        avg_pool = torch.mean(x, dim=1, keepdim=True)
+        max_pool, _ = torch.max(x, dim=1, keepdim=True)
+        spatial = torch.cat([avg_pool, max_pool], dim=1)
+        spatial_att = self.spatial_gate(spatial)
+        x = x * spatial_att
+        
+        return x
+
+class BottleneckCSP(nn.Module):
+    """CSP Bottleneck with 增强"""
+    def __init__(self, in_channels, out_channels, n=1, shortcut=True, expansion=0.5, use_att=True):
+        super().__init__()
+        hidden_channels = int(out_channels * expansion)
+        self.conv1 = ConvBNSiLU(in_channels, hidden_channels, 1, 1)
+        self.conv2 = nn.Conv2d(in_channels, hidden_channels, 1, 1, bias=False)
+        self.conv3 = nn.Conv2d(hidden_channels, hidden_channels, 1, 1, bias=False)
+        self.conv4 = ConvBNSiLU(2 * hidden_channels, out_channels, 1, 1)
+        self.bn = nn.BatchNorm2d(2 * hidden_channels)
+        
+        # 添加注意力机制
+        self.use_att = use_att
+        if use_att:
+            self.cbam = CBAM(hidden_channels)
+        
+        # 主干部分
+        self.bottlenecks = nn.Sequential(
+            *[Bottleneck(
+                hidden_channels, hidden_channels, shortcut, 1.0
+            ) for _ in range(n)]
+        )
     
     def forward(self, x):
         y1 = self.conv1(x)
-        y1 = self.resblocks(y1)
+        y1 = self.bottlenecks(y1)
         
+        if self.use_att:
+            y1 = self.cbam(y1)
+            
         y2 = self.conv2(x)
-        
         y = torch.cat([y1, y2], dim=1)
-        y = self.conv3(y)
-        
-        if USE_CBAM:
-            y = self.cbam(y)
-            
-        if self.add_identity:
-            y = y + x
-            
-        return y
+        y = self.bn(y)
+        y = F.silu(y)
+        return self.conv4(y)
 
-class SwinTransformerLayer(nn.Module):
-    """Swin Transformer层"""
-    def __init__(self, dim, num_heads, window_size=7, shift_size=0,
-                 mlp_ratio=4., qkv_bias=True, drop=0., attn_drop=0., drop_path=0.,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm, pretrained=False):
+class Bottleneck(nn.Module):
+    """标准瓶颈结构"""
+    def __init__(self, in_channels, out_channels, shortcut=True, expansion=0.5):
         super().__init__()
-        self.dim = dim
-        self.num_heads = num_heads
-        self.window_size = window_size
-        self.shift_size = shift_size
-        self.mlp_ratio = mlp_ratio
-        
-        self.norm1 = norm_layer(dim)
-        self.attn = WindowAttention(
-            dim, window_size=to_2tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, attn_drop=attn_drop, proj_drop=drop)
-
-        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(dim * mlp_ratio)
-        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
-
-    def forward(self, x, mask_matrix=None):
-        B, C, H, W = x.shape
-        
-        # 将特征图转换为序列形式
-        x = x.permute(0, 2, 3, 1).contiguous()  # B, H, W, C
-        
-        shortcut = x
-        x = self.norm1(x)
-        
-        # 如果是移位窗口注意力
-        if self.shift_size > 0:
-            # 计算注意力掩码
-            if mask_matrix is None:
-                mask_matrix = torch.zeros((1, H, W, 1), device=x.device)
-                h_slices = (slice(0, -self.window_size),
-                           slice(-self.window_size, -self.shift_size),
-                           slice(-self.shift_size, None))
-                w_slices = (slice(0, -self.window_size),
-                           slice(-self.window_size, -self.shift_size),
-                           slice(-self.shift_size, None))
-                cnt = 0
-                for h in h_slices:
-                    for w in w_slices:
-                        mask_matrix[:, h, w, :] = cnt
-                        cnt += 1
-                mask_matrix = mask_matrix.view(1, H // self.window_size, self.window_size, 
-                                             W // self.window_size, self.window_size, 1)
-                mask_matrix = mask_matrix.permute(0, 1, 3, 2, 4, 5).contiguous()
-                mask_matrix = mask_matrix.view(-1, self.window_size * self.window_size)
-                attn_mask = mask_matrix.unsqueeze(1) - mask_matrix.unsqueeze(2)
-                attn_mask = attn_mask.masked_fill(attn_mask != 0, -100.0).masked_fill(attn_mask == 0, 0.0)
-            else:
-                attn_mask = mask_matrix
-            
-            # 循环移位
-            shifted_x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
-            
-            # 分割窗口
-            x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
-            x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
-            
-            # W-MSA/SW-MSA
-            attn_windows = self.attn(x_windows, mask=attn_mask)  # nW*B, window_size*window_size, C
-            
-            # 合并窗口
-            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
-            shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
-            
-            # 反向循环移位
-            x = torch.roll(shifted_x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
-        else:
-            # 分割窗口
-            x_windows = window_partition(x, self.window_size)  # nW*B, window_size, window_size, C
-            x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
-            
-            # W-MSA
-            attn_windows = self.attn(x_windows, mask=None)  # nW*B, window_size*window_size, C
-            
-            # 合并窗口
-            attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
-            x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
-        
-        # FFN
-        x = shortcut + self.drop_path(x)
-        x = x + self.drop_path(self.mlp(self.norm2(x)))
-        
-        # 转换回特征图形式
-        x = x.permute(0, 3, 1, 2).contiguous()  # B, C, H, W
-        
-        return x
-
-class WindowAttention(nn.Module):
-    """窗口多头自注意力模块"""
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, attn_drop=0., proj_drop=0.):
-        super().__init__()
-        self.dim = dim
-        self.window_size = window_size  # Wh, Ww
-        self.num_heads = num_heads
-        head_dim = dim // num_heads
-        self.scale = head_dim ** -0.5
-
-        # 相对位置偏置参数表
-        self.relative_position_bias_table = nn.Parameter(
-            torch.zeros((2 * window_size[0] - 1) * (2 * window_size[1] - 1), num_heads))
-        
-        # 获取窗口内每个token的相对坐标
-        coords_h = torch.arange(self.window_size[0])
-        coords_w = torch.arange(self.window_size[1])
-        coords = torch.stack(torch.meshgrid([coords_h, coords_w]))  # 2, Wh, Ww
-        coords_flatten = torch.flatten(coords, 1)  # 2, Wh*Ww
-        
-        # 计算相对坐标
-        relative_coords = coords_flatten[:, :, None] - coords_flatten[:, None, :]  # 2, Wh*Ww, Wh*Ww
-        relative_coords = relative_coords.permute(1, 2, 0).contiguous()  # Wh*Ww, Wh*Ww, 2
-        relative_coords[:, :, 0] += self.window_size[0] - 1  # 平移到从0开始
-        relative_coords[:, :, 1] += self.window_size[1] - 1
-        relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
-        relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
-        self.register_buffer("relative_position_index", relative_position_index)
-
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Linear(dim, dim)
-        self.proj_drop = nn.Dropout(proj_drop)
-
-        nn.init.trunc_normal_(self.relative_position_bias_table, std=.02)
-        self.softmax = nn.Softmax(dim=-1)
-
-    def forward(self, x, mask=None):
-        B_, N, C = x.shape
-        qkv = self.qkv(x).reshape(B_, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # B_, self.num_heads, N, C // self.num_heads
-
-        q = q * self.scale
-        attn = (q @ k.transpose(-2, -1))
-
-        # 添加相对位置编码
-        relative_position_bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
-            self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)  # Wh*Ww,Wh*Ww,nH
-        relative_position_bias = relative_position_bias.permute(2, 0, 1).contiguous()  # nH, Wh*Ww, Wh*Ww
-        attn = attn + relative_position_bias.unsqueeze(0)
-
-        # 添加注意力掩码（对于移位窗口）
-        if mask is not None:
-            nW = mask.shape[0]
-            attn = attn.view(B_ // nW, nW, self.num_heads, N, N) + mask.unsqueeze(1).unsqueeze(0)
-            attn = attn.view(-1, self.num_heads, N, N)
-            attn = self.softmax(attn)
-        else:
-            attn = self.softmax(attn)
-
-        attn = self.attn_drop(attn)
-        x = (attn @ v).transpose(1, 2).reshape(B_, N, C)
-        x = self.proj(x)
-        x = self.proj_drop(x)
-        return x
-
-class Mlp(nn.Module):
-    """MLP模块"""
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
-        super().__init__()
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
-
+        hidden_channels = int(out_channels * expansion)
+        self.conv1 = ConvBNSiLU(in_channels, hidden_channels, 1)
+        self.conv2 = ConvBNSiLU(hidden_channels, out_channels, 3, padding=1)
+        self.add = shortcut and in_channels == out_channels
+    
     def forward(self, x):
-        x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
-        return x
+        return x + self.conv2(self.conv1(x)) if self.add else self.conv2(self.conv1(x))
 
-def window_partition(x, window_size):
-    """将特征图分割成不重叠的窗口"""
-    B, H, W, C = x.shape
-    x = x.view(B, H // window_size, window_size, W // window_size, window_size, C)
-    windows = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(-1, window_size, window_size, C)
-    return windows
-
-def window_reverse(windows, window_size, H, W):
-    """将窗口还原为特征图"""
-    B = int(windows.shape[0] / (H * W / window_size / window_size))
-    x = windows.view(B, H // window_size, W // window_size, window_size, window_size, -1)
-    x = x.permute(0, 1, 3, 2, 4, 5).contiguous().view(B, H, W, -1)
-    return x
-
-class SwinTransformerBlock(nn.Module):
-    """Swin Transformer块，包含一个W-MSA和一个SW-MSA"""
-    def __init__(self, dim, num_heads, window_size=7, mlp_ratio=4., 
-                 qkv_bias=True, drop=0., attn_drop=0., drop_path=0.):
+class CrossStagePartialBlock(nn.Module):
+    """Enhanced CSP Block with Dynamic Layers"""
+    def __init__(self, in_channels, out_channels, num_bottlenecks=1, shortcut=True, expansion=0.5, use_att=True):
         super().__init__()
+        hidden_channels = int(out_channels * expansion)
         
-        self.window_size = window_size
-        self.attn_layers = nn.ModuleList([
-            SwinTransformerLayer(dim=dim, num_heads=num_heads, window_size=window_size,
-                                 shift_size=0, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias,
-                                 drop=drop, attn_drop=attn_drop, drop_path=drop_path),
-            SwinTransformerLayer(dim=dim, num_heads=num_heads, window_size=window_size,
-                                 shift_size=window_size // 2, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias,
-                                 drop=drop, attn_drop=attn_drop, drop_path=drop_path),
+        # 部分1路径
+        self.part1_conv = ConvBNSiLU(in_channels, hidden_channels, 1)
+        
+        # 部分2路径 (主干)
+        self.part2_conv1 = ConvBNSiLU(in_channels, hidden_channels, 1)
+        self.part2_bottlenecks = nn.Sequential(*[
+            Bottleneck(hidden_channels, hidden_channels, shortcut, 1.0) 
+            for _ in range(num_bottlenecks)
+        ])
+        
+        if use_att:
+            self.attention = CBAM(hidden_channels)
+        else:
+            self.attention = nn.Identity()
+        
+        self.part2_conv2 = ConvBNSiLU(hidden_channels, hidden_channels, 1)
+        
+        # 合并路径
+        self.concat_conv = ConvBNSiLU(hidden_channels * 2, out_channels, 1)
+        
+        # 动态ReLU
+        self.act = DyReLU(out_channels)
+    
+    def forward(self, x):
+        # 部分1路径
+        part1 = self.part1_conv(x)
+        
+        # 部分2路径 (主干)
+        part2 = self.part2_conv1(x)
+        part2 = self.part2_bottlenecks(part2)
+        part2 = self.attention(part2)
+        part2 = self.part2_conv2(part2)
+        
+        # 合并并输出
+        out = torch.cat([part2, part1], dim=1)
+        out = self.concat_conv(out)
+        return self.act(out)
+
+class SpatialPyramidPooling(nn.Module):
+    """空间金字塔池化"""
+    def __init__(self, in_channels, out_channels, kernel_sizes=(5, 9, 13)):
+        super().__init__()
+        hidden_channels = in_channels // 2
+        self.conv1 = ConvBNSiLU(in_channels, hidden_channels, 1, 1)
+        self.conv2 = ConvBNSiLU(hidden_channels * (len(kernel_sizes) + 1), out_channels, 1, 1)
+        self.maxpools = nn.ModuleList([
+            nn.MaxPool2d(kernel_size=k, stride=1, padding=k // 2) for k in kernel_sizes
         ])
     
     def forward(self, x):
-        for attn_layer in self.attn_layers:
-            x = attn_layer(x)
+        x = self.conv1(x)
+        features = [x]
+        features.extend([maxpool(x) for maxpool in self.maxpools])
+        out = torch.cat(features, dim=1)
+        return self.conv2(out)
+
+class Focus(nn.Module):
+    """Focus模块：将空间维度信息聚焦到通道维度"""
+    def __init__(self, in_channels, out_channels, kernel_size=1, stride=1, padding=None):
+        super().__init__()
+        self.conv = ConvBNSiLU(in_channels * 4, out_channels, kernel_size, stride, padding)
+    
+    def forward(self, x):
+        # 将图像切分为4个部分并沿通道维拼接
+        patch_top_left = x[..., ::2, ::2]
+        patch_top_right = x[..., ::2, 1::2]
+        patch_bottom_left = x[..., 1::2, ::2]
+        patch_bottom_right = x[..., 1::2, 1::2]
+        x = torch.cat([
+            patch_top_left, patch_top_right,
+            patch_bottom_left, patch_bottom_right
+        ], dim=1)
+        return self.conv(x)
+
+class DownsampleBlock(nn.Module):
+    """下采样块，降低特征图尺寸"""
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.conv = ConvBNSiLU(in_channels, out_channels, 3, 2, 1)
+    
+    def forward(self, x):
+        return self.conv(x)
+
+class CoorAttention(nn.Module):
+    """坐标注意力机制"""
+    def __init__(self, channels, reduction=32):
+        super().__init__()
+        self.h_pool = nn.AdaptiveAvgPool2d((None, 1))
+        self.w_pool = nn.AdaptiveAvgPool2d((1, None))
+        
+        self.conv1 = nn.Conv2d(channels, channels // reduction, 1, 1, 0)
+        self.bn1 = nn.BatchNorm2d(channels // reduction)
+        self.act1 = nn.ReLU(inplace=True)
+        
+        self.conv_h = nn.Conv2d(channels // reduction, channels, 1, 1, 0)
+        self.conv_w = nn.Conv2d(channels // reduction, channels, 1, 1, 0)
+    
+    def forward(self, x):
+        identity = x
+        
+        batch, channels, height, width = x.size()
+        # 沿高度方向池化
+        x_h = self.h_pool(x)
+        # 沿宽度方向池化
+        x_w = self.w_pool(x).permute(0, 1, 3, 2)
+        
+        # 合并两个方向的特征
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act1(y)
+        
+        # 再次分离
+        x_h, x_w = torch.split(y, [height, width], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+        
+        # 生成注意力图
+        a_h = torch.sigmoid(self.conv_h(x_h))
+        a_w = torch.sigmoid(self.conv_w(x_w))
+        
+        # 应用注意力
+        out = identity * a_h * a_w
+        
+        return out
+
+class BiFormerBlock(nn.Module):
+    """改进的Transformer Block with Efficient Attention"""
+    def __init__(self, dim, heads=8, dim_head=64, mlp_ratio=4):
+        super().__init__()
+        inner_dim = dim_head * heads
+        mlp_hidden_dim = dim * mlp_ratio
+        
+        # LN for attention
+        self.norm1 = nn.LayerNorm(dim)
+        
+        # Efficient multi-head attention
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.attention_scale = dim_head ** -0.5
+        self.heads = heads
+        self.dim_head = dim_head
+        
+        # Output projection
+        self.to_out = nn.Linear(inner_dim, dim)
+        
+        # LN for MLP
+        self.norm2 = nn.LayerNorm(dim)
+        
+        # MLP
+        self.mlp = nn.Sequential(
+            nn.Linear(dim, mlp_hidden_dim),
+            nn.GELU(),
+            nn.Linear(mlp_hidden_dim, dim)
+        )
+        
+        # Dynamic weights
+        self.dynamic_weights = nn.Parameter(torch.ones(2))
+    
+    def forward(self, x):
+        # 注意：输入 x 形状为 (B, C, H, W)
+        B, C, H, W = x.shape
+        N = H * W
+        x_flat = x.flatten(2).transpose(1, 2)  # (B, N, C)
+        
+        # 归一化并计算注意力
+        identity = x_flat
+        x_ln = self.norm1(x_flat)
+        
+        # Multi-head attention
+        qkv = self.to_qkv(x_ln).chunk(3, dim=-1)
+        q, k, v = map(lambda t: t.reshape(B, N, self.heads, self.dim_head).transpose(1, 2), qkv)
+        
+        # 高效稀疏注意力
+        attn = (q @ k.transpose(-2, -1)) * self.attention_scale
+        attn = attn.softmax(dim=-1)
+        
+        # 注意力输出
+        out = (attn @ v).transpose(1, 2).reshape(B, N, -1)
+        out = self.to_out(out)
+        
+        # 第一个残差连接
+        weights = F.softmax(self.dynamic_weights, dim=0)
+        x_flat = identity * weights[0] + out * weights[1]
+        
+        # MLP
+        identity = x_flat
+        x_flat = self.norm2(x_flat)
+        x_flat = self.mlp(x_flat)
+        
+        # 第二个残差连接
+        x_flat = identity + x_flat
+        
+        # 恢复原始形状
+        x = x_flat.transpose(1, 2).reshape(B, C, H, W)
+        
         return x
 
-class YOLOv7SwinBackbone(nn.Module):
-    """使用Swin Transformer作为骨干网络的YOLOv7"""
-    def __init__(self):
+class FTB(nn.Module):
+    """高效特征变换块"""
+    def __init__(self, in_channels, out_channels):
         super().__init__()
+        self.conv1x1 = ConvBNSiLU(in_channels, out_channels, 1)
         
-        # 初始卷积层
-        self.conv1 = ConvBNSiLU(3, 32, 3, 1)
-        self.conv2 = ConvBNSiLU(32, 64, 3, 2)  # 下采样
-        self.conv3 = ConvBNSiLU(64, 64, 3, 1)
+        # 深度可分离卷积
+        self.depthwise = nn.Conv2d(
+            out_channels, out_channels, 3, padding=1, groups=out_channels, bias=False
+        )
+        self.pointwise = nn.Conv2d(
+            out_channels, out_channels, 1, bias=False
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = nn.SiLU(inplace=True)
         
-        # 第一个阶段
-        self.stage1_csp = CSPBlock(64, 128, num_resblocks=2)
-        self.stage1_down = ConvBNSiLU(128, 128, 3, 2)  # 下采样
-        self.stage1_swin = SwinTransformerBlock(128, num_heads=4, window_size=7)
-        
-        # 第二个阶段
-        self.stage2_csp = CSPBlock(128, 256, num_resblocks=4)
-        self.stage2_down = ConvBNSiLU(256, 256, 3, 2)  # 下采样
-        self.stage2_swin = SwinTransformerBlock(256, num_heads=8, window_size=7)
-        
-        # 第三个阶段
-        self.stage3_csp = CSPBlock(256, 512, num_resblocks=8)
-        self.stage3_down = ConvBNSiLU(512, 512, 3, 2)  # 下采样
-        self.stage3_swin = SwinTransformerBlock(512, num_heads=16, window_size=7)
-        
-        # 第四个阶段
-        self.stage4_csp = CSPBlock(512, 1024, num_resblocks=4)
-        
+        # 注意力机制
+        self.se = SEModule(out_channels)
+    
     def forward(self, x):
-        # 初始卷积层
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
+        x = self.conv1x1(x)
+        identity = x
         
-        # 第一个阶段
-        x = self.stage1_csp(x)
-        x1 = x  # 保存特征图用于FPN
-        x = self.stage1_down(x)
-        x = self.stage1_swin(x)
+        x = self.depthwise(x)
+        x = self.pointwise(x)
+        x = self.bn(x)
+        x = self.act(x)
         
-        # 第二个阶段
-        x = self.stage2_csp(x)
-        x2 = x  # 保存特征图用于FPN
-        x = self.stage2_down(x)
-        x = self.stage2_swin(x)
+        x = self.se(x)
         
-        # 第三个阶段
-        x = self.stage3_csp(x)
-        x3 = x  # 保存特征图用于FPN
-        x = self.stage3_down(x)
-        x = self.stage3_swin(x)
-        
-        # 第四个阶段
-        x = self.stage4_csp(x)
-        x4 = x
-        
-        return x1, x2, x3, x4
+        return x + identity
 
-class YOLOv7SwinNeck(nn.Module):
-    """YOLOv7的特征金字塔网络（FPN）和路径聚合网络（PAN）结合"""
-    def __init__(self):
+class YOLOv10(nn.Module):
+    """改进的YOLOv10模型"""
+    def __init__(self, num_classes=7, img_size=640):
         super().__init__()
-        
-        # FPN上采样路径
-        self.up_conv1 = ConvBNSiLU(1024, 512, 1)
-        self.up_conv2 = ConvBNSiLU(1024, 512, 1)
-        self.up_conv3 = ConvBNSiLU(512, 256, 1)
-        
-        # FPN融合层
-        self.up_fusion1 = CSPBlock(1024, 512, num_resblocks=2)
-        self.up_fusion2 = CSPBlock(512, 256, num_resblocks=2)
-        self.up_fusion3 = CSPBlock(256, 128, num_resblocks=2)
-        
-        # PAN下采样路径
-        self.down_conv1 = ConvBNSiLU(256, 256, 3, 2)
-        self.down_conv2 = ConvBNSiLU(512, 512, 3, 2)
-        
-        # PAN融合层
-        self.down_fusion1 = CSPBlock(512, 512, num_resblocks=2)
-        self.down_fusion2 = CSPBlock(1024, 1024, num_resblocks=2)
-        
-    def forward(self, features):
-        x1, x2, x3, x4 = features
-        
-        # FPN: 自上而下路径
-        p4 = self.up_conv1(x4)
-        p4_up = F.interpolate(p4, scale_factor=2, mode='nearest')
-        p3 = torch.cat([p4_up, x3], dim=1)
-        p3 = self.up_fusion1(p3)
-        
-        p3_up = self.up_conv2(p3)
-        p3_up = F.interpolate(p3_up, scale_factor=2, mode='nearest')
-        p2 = torch.cat([p3_up, x2], dim=1)
-        p2 = self.up_fusion2(p2)
-        
-        p2_up = self.up_conv3(p2)
-        p2_up = F.interpolate(p2_up, scale_factor=2, mode='nearest')
-        p1 = torch.cat([p2_up, x1], dim=1)
-        p1 = self.up_fusion3(p1)
-        
-        # PAN: 自下而上路径
-        p1_down = self.down_conv1(p1)
-        p2 = torch.cat([p1_down, p2], dim=1)
-        p2 = self.down_fusion1(p2)
-        
-        p2_down = self.down_conv2(p2)
-        p3 = torch.cat([p2_down, p3], dim=1)
-        p3 = self.down_fusion2(p3)
-        
-        return p1, p2, p3
-
-class ScalePrediction(nn.Module):
-    """尺度预测层"""
-    def __init__(self, in_channels, num_classes):
-        super().__init__()
-        
-        # 每个预测框有5+num_classes个参数：x, y, w, h, obj_conf, class_probs
-        self.pred = nn.Conv2d(in_channels, 3 * (5 + num_classes), kernel_size=1)
         self.num_classes = num_classes
+        self.img_size = img_size
         
+        # 主干网络 (Backbone)
+        self.backbone = self._create_backbone()
+        
+        # 特征金字塔网络 (Feature Pyramid Network)
+        self.fpn = self._create_fpn()
+        
+        # 检测头 (Detection Heads)
+        self.heads = self._create_heads()
+        
+        # 锚点尺寸
+        self.register_buffer('strides', torch.tensor([8, 16, 32]))
+        self.register_buffer('anchors', 
+            torch.tensor([
+                [[10, 13], [16, 30], [33, 23]],  # 小物体 (P3)
+                [[30, 61], [62, 45], [59, 119]],  # 中物体 (P4)
+                [[116, 90], [156, 198], [373, 326]]  # 大物体 (P5)
+            ]).float()
+        )
+        
+        # 初始化权重
+        self._init_weights()
+        
+    def _create_backbone(self):
+        """创建主干网络"""
+        return nn.ModuleList([
+            # 输入层: 3 -> 32
+            Focus(3, 32, 3, 1, 1),
+            
+            # 下采样1: 32 -> 64
+            DownsampleBlock(32, 64),
+            CrossStagePartialBlock(64, 64, 1),
+            
+            # 下采样2: 64 -> 128
+            DownsampleBlock(64, 128),
+            CrossStagePartialBlock(128, 128, 3),
+            
+            # 下采样3: 128 -> 256
+            DownsampleBlock(128, 256),
+            CrossStagePartialBlock(256, 256, 3),
+            
+            # 下采样4: 256 -> 512
+            DownsampleBlock(256, 512),
+            CrossStagePartialBlock(512, 512, 1),
+            
+            # 下采样5: 512 -> 1024
+            DownsampleBlock(512, 1024),
+            CrossStagePartialBlock(1024, 1024, 1),
+            
+            # SPP: 1024 -> 1024
+            SpatialPyramidPooling(1024, 1024),
+        ])
+    
+    def _create_fpn(self):
+        """创建特征金字塔网络"""
+        return nn.ModuleList([
+            # 上采样路径
+            ConvBNSiLU(1024, 512, 1, 1),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            CrossStagePartialBlock(1024, 512, 1),  # 拼接后
+            
+            ConvBNSiLU(512, 256, 1, 1),
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            CrossStagePartialBlock(512, 256, 1),   # 拼接后
+            
+            # 下采样路径 (特征增强)
+            ConvBNSiLU(256, 256, 3, 2, 1),
+            CrossStagePartialBlock(512, 512, 1),   # 拼接后
+            
+            ConvBNSiLU(512, 512, 3, 2, 1),
+            CrossStagePartialBlock(1024, 1024, 1)  # 拼接后
+        ])
+        
+    def _create_heads(self):
+        """创建检测头"""
+        return nn.ModuleList([
+            # 小物体检测头 (P3/8)
+            nn.Sequential(
+                ConvBNSiLU(256, 256, 3, 1, 1),
+                nn.Conv2d(256, 3 * (5 + self.num_classes), 1)
+            ),
+            # 中物体检测头 (P4/16)
+            nn.Sequential(
+                ConvBNSiLU(512, 512, 3, 1, 1),
+                nn.Conv2d(512, 3 * (5 + self.num_classes), 1)
+            ),
+            # 大物体检测头 (P5/32)
+            nn.Sequential(
+                ConvBNSiLU(1024, 1024, 3, 1, 1),
+                BiFormerBlock(1024),  # 对大物体使用Transformer提取全局上下文
+                nn.Conv2d(1024, 3 * (5 + self.num_classes), 1)
+            )
+        ])
+    
+    def _init_weights(self):
+        """初始化模型权重"""
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+    
     def forward(self, x):
-        return self.pred(x)
-
-class YOLOv7SwinHead(nn.Module):
-    """YOLOv7的检测头"""
-    def __init__(self, num_classes):
-        super().__init__()
+        """前向传播"""
+        # 特征提取
+        features = []
+        for i, module in enumerate(self.backbone):
+            x = module(x)
+            if i in [6, 8, 11]:  # 保存P3, P4, P5特征图
+                features.append(x)
         
-        # 检测头卷积层
-        self.head_conv1 = ConvBNSiLU(128, 256, 3, 1)
-        self.head_conv2 = ConvBNSiLU(512, 512, 3, 1)
-        self.head_conv3 = ConvBNSiLU(1024, 1024, 3, 1)
+        # FPN: 自下而上的路径增强
+        fpn_features = [features[2]]  # P5
         
-        # 尺度预测层
-        self.scale_pred1 = ScalePrediction(256, num_classes)
-        self.scale_pred2 = ScalePrediction(512, num_classes)
-        self.scale_pred3 = ScalePrediction(1024, num_classes)
+        # 上采样路径
+        x = self.fpn[0](fpn_features[0])
+        x = self.fpn[1](x)
         
-    def forward(self, features):
-        p1, p2, p3 = features
+        # 拼接P4
+        x = torch.cat([x, features[1]], dim=1)
+        x = self.fpn[2](x)
+        fpn_features.insert(0, x)  # P4
         
-        # 对每个特征图进行预测
-        p1 = self.head_conv1(p1)
-        p2 = self.head_conv2(p2)
-        p3 = self.head_conv3(p3)
+        x = self.fpn[3](fpn_features[0])
+        x = self.fpn[4](x)
         
-        pred1 = self.scale_pred1(p1)
-        pred2 = self.scale_pred2(p2)
-        pred3 = self.scale_pred3(p3)
+        # 拼接P3
+        x = torch.cat([x, features[0]], dim=1)
+        x = self.fpn[5](x)
+        fpn_features.insert(0, x)  # P3
         
-        return [pred1, pred2, pred3]
-
-class YOLOv7Swin(nn.Module):
-    """完整的YOLOv7-Swin模型"""
-    def __init__(self, num_classes=20):
-        super().__init__()
+        # 下采样路径 (特征增强)
+        x = self.fpn[6](fpn_features[0])
+        x = torch.cat([x, fpn_features[1]], dim=1)
+        x = self.fpn[7](x)
+        fpn_features[1] = x  # 增强的P4
         
-        self.backbone = YOLOv7SwinBackbone()
-        self.neck = YOLOv7SwinNeck()
-        self.head = YOLOv7SwinHead(num_classes)
+        x = self.fpn[8](fpn_features[1])
+        x = torch.cat([x, fpn_features[2]], dim=1)
+        x = self.fpn[9](x)
+        fpn_features[2] = x  # 增强的P5
         
-        # 锚点，三个尺度，每个尺度三个锚点
-        self.anchors = torch.tensor([
-            # 小尺度
-            [[10, 13], [16, 30], [33, 23]],
-            # 中尺度
-            [[30, 61], [62, 45], [59, 119]],
-            # 大尺度
-            [[116, 90], [156, 198], [373, 326]],
-        ]).float()
+        # 检测头
+        outputs = []
+        for i, head in enumerate(self.heads):
+            outputs.append(head(fpn_features[i]))
         
-        self.strides = torch.tensor([8, 16, 32])
-        self.num_classes = num_classes
+        return outputs
+    
+    def _make_grid(self, nx=20, ny=20, i=0):
+        """生成网格"""
+        device = self.anchors.device
+        tensor = torch.zeros(1, 3, ny, nx, 5 + self.num_classes, device=device)
+        yv, xv = torch.meshgrid([torch.arange(ny, device=device), torch.arange(nx, device=device)])
+        grid = torch.stack((xv, yv), 2).expand(1, 3, ny, nx, 2).float()
+        anchor_grid = self.anchors[i].clone().view(1, 3, 1, 1, 2).expand(1, 3, ny, nx, 2).to(device)
         
-    def forward(self, x):
-        # 获取批次大小和特征图尺寸
-        batch_size = x.shape[0]
+        tensor[..., 0:2] = grid + 0.5  # xy
+        tensor[..., 2:4] = anchor_grid  # wh
+        return tensor.view(1, 3 * ny * nx, -1)
+    
+    def process_predictions(self, predictions, img_size):
+        """处理预测结果，转换为标准格式"""
+        batch_size = predictions[0].shape[0]
+        device = predictions[0].device
         
-        # 通过主干网络
-        backbone_features = self.backbone(x)
-        
-        # 通过颈部网络
-        neck_features = self.neck(backbone_features)
-        
-        # 通过检测头
-        predictions = self.head(neck_features)
-        
-        # 如果是训练模式，直接返回原始预测结果
-        if self.training:
-            return predictions
-        
-        # 如果是推理模式，处理预测结果
-        device = x.device
         grids = []
-        strides = []
-        
-        # 转换预测结果的格式并解码
         for i, pred in enumerate(predictions):
-            # 获取特征图尺寸
-            _, _, h, w = pred.shape
+            # 获取网格大小
+            ny, nx = pred.shape[2:4]
             
-            # 尺度和锚点
-            stride = self.strides[i]
-            anchors = self.anchors[i] / stride
+            # 重塑预测结果: [B, 3*(5+C), H, W] -> [B, 3, H, W, 5+C]
+            pred = pred.view(batch_size, 3, 5 + self.num_classes, ny, nx)
+            pred = pred.permute(0, 1, 3, 4, 2).contiguous()
             
-            # 重塑预测结果
-            pred = pred.view(batch_size, 3, 5 + self.num_classes, h, w).permute(0, 1, 3, 4, 2).contiguous()
+            # 应用激活函数
+            pred[..., 0:2] = torch.sigmoid(pred[..., 0:2])  # xy
+            pred[..., 2:4] = torch.exp(pred[..., 2:4]) * self.anchors[i].to(device)  # wh
+            pred[..., 4:] = torch.sigmoid(pred[..., 4:])  # conf, cls
             
-            # 创建网格
-            grid_y, grid_x = torch.meshgrid([torch.arange(h), torch.arange(w)])
-            grid = torch.stack((grid_x, grid_y), 2).view(1, 1, h, w, 2).float().to(device)
-            grids.append(grid)
-            strides.append(torch.full((1, 1, h, w, 1), stride).to(device))
+            # 计算网格偏移
+            stride = img_size / nx
+            grid = self._make_grid(nx, ny, i)
+            pred[..., 0:2] = (pred[..., 0:2] * 2. - 0.5 + grid[..., 0:2]) * stride
+            pred[..., 2:4] = pred[..., 2:4] * stride
             
-            # 解码预测结果
-            pred[..., 0:2] = (torch.sigmoid(pred[..., 0:2]) + grid) * stride
-            pred[..., 2:4] = torch.exp(pred[..., 2:4]) * anchors.view(1, 3, 1, 1, 2).to(device) * stride
-            pred[..., 4:] = torch.sigmoid(pred[..., 4:])
-            
-            predictions[i] = pred.view(batch_size, -1, 5 + self.num_classes)
+            # [B, 3*H*W, 5+C]
+            grids.append(pred.reshape(batch_size, -1, 5 + self.num_classes))
         
-        # 合并所有尺度的预测结果
-        output = torch.cat(predictions, dim=1)
-        
-        return output
+        # 合并所有预测
+        return torch.cat(grids, dim=1)
+```
 
-def build_model():
-    """构建目标检测模型"""
-    model = YOLOv7Swin(num_classes=len(VOC_CLASSES))
-    return model
+## 4. 训练脚本 (train.py)
 
-if __name__ == "__main__":
-    # 测试模型
-    model = build_model()
-    x = torch.randn(2, 3, 640, 640)
-    output = model(x)
-    print(f"输入形状: {x.shape}")
-    
-    if isinstance(output, list):
-        print("训练模式:")
-        for i, out in enumerate(output):
-            print(f"  输出 {i+1} 形状: {out.shape}")
-    else:
-        print(f"推理模式, 输出形状: {output.shape}")
-
-
-        import os
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.font_manager import FontProperties
-from pathlib import Path
-import logging
-from tqdm import tqdm
+```python
+import os
+import time
 import json
-import cv2
-from PIL import Image, ImageDraw, ImageFont
-import time
-
-from config import *
-from model import build_model
-from data_preparation import create_data_loaders
-from utils.metrics import xywh2xyxy, non_max_suppression
-from utils.visualization import visualize_test_predictions
-
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-font = FontProperties(fname=FONT_PATH)
-
-# 配置日志
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler(LOG_PATH / "test.log"),
-        logging.StreamHandler()
-    ]
-)
-
-class Tester:
-    def __init__(self, model, test_loader, device, confidence_threshold=0.25, iou_threshold=0.45):
-        self.model = model.to(device)
-        self.test_loader = test_loader
-        self.device = device
-        self.confidence_threshold = confidence_threshold
-        self.iou_threshold = iou_threshold
-        
-        # 确保结果目录存在
-        self.test_results_path = PREDICTION_PATH
-        self.test_results_path.mkdir(parents=True, exist_ok=True)
-        
-        # 创建子目录
-        self.detection_images_path = self.test_results_path / "detection_images"
-        self.detection_images_path.mkdir(parents=True, exist_ok=True)
-        
-        # 存储性能指标
-        self.metrics = {
-            'average_precision': 0.0,
-            'inference_time': 0.0,
-            'fps': 0.0
-        }
-    
-    def test(self):
-        logging.info("开始测试...")
-        self.model.eval()
-        
-        # 存储检测结果
-        all_detections = []
-        inference_times = []
-        
-        with torch.no_grad():
-            progress_bar = tqdm(enumerate(self.test_loader), total=len(self.test_loader))
-            
-            for batch_idx, (images, img_ids, orig_sizes) in progress_bar:
-                # 将图像移到设备
-                images = images.to(self.device)
-                
-                # 计时开始
-                start_time = time.time()
-                
-                # 前向传播获取预测结果
-                predictions = self.model(images)
-                
-                # 应用NMS
-                predictions = non_max_suppression(
-                    predictions, 
-                    conf_thres=self.confidence_threshold,
-                    iou_thres=self.iou_threshold
-                )
-                
-                # 计时结束
-                end_time = time.time()
-                inference_time = (end_time - start_time) / images.size(0)  # 平均每张图像的推理时间
-                inference_times.append(inference_time)
-                
-                # 处理每张图像的预测结果
-                for i, (pred, img_id, orig_size) in enumerate(zip(predictions, img_ids, orig_sizes)):
-                    # 创建检测结果字典
-                    detection = {
-                        'image_id': img_id,
-                        'detections': []
-                    }
-                    
-                    if pred is not None and len(pred) > 0:
-                        # 调整检测框到原始图像尺寸
-                        pred[:, :4] = scale_boxes(images.shape[2:], pred[:, :4], orig_size)
-                        
-                        # 保存每个检测结果
-                        for *xyxy, conf, cls_id in pred:
-                            box = [int(xyxy[0]), int(xyxy[1]), int(xyxy[2]), int(xyxy[3])]
-                            category_id = int(cls_id.item())
-                            score = float(conf.item())
-                            
-                            detection['detections'].append({
-                                'category_id': category_id,
-                                'category_name': VOC_CLASSES[category_id],
-                                'bbox': box,
-                                'score': score
-                            })
-                    
-                    # 添加到所有检测结果
-                    all_detections.append(detection)
-                    
-                    # 可视化前100个测试图像
-                    if batch_idx * images.size(0) + i < 100:
-                        # 加载原始图像
-                        img_path = TEST_DATA_PATH / "JPEGImages" / f"{img_id}.jpg"
-                        if Path(img_path).exists():
-                            original_img = cv2.imread(str(img_path))
-                            original_img = cv2.cvtColor(original_img, cv2.COLOR_BGR2RGB)
-                            
-                            # 可视化检测结果
-                            result_img = visualize_test_predictions(
-                                original_img.copy(), 
-                                detection['detections']
-                            )
-                            
-                            # 保存结果图像
-                            save_path = self.detection_images_path / f"{img_id}_detection.jpg"
-                            cv2.imwrite(str(save_path), cv2.cvtColor(result_img, cv2.COLOR_RGB2BGR))
-        
-        # 计算平均推理时间和FPS
-        avg_inference_time = np.mean(inference_times)
-        avg_fps = 1.0 / avg_inference_time if avg_inference_time > 0 else 0
-        
-        self.metrics['inference_time'] = avg_inference_time
-        self.metrics['fps'] = avg_fps
-        
-        logging.info(f"测试完成")
-        logging.info(f"平均推理时间: {avg_inference_time*1000:.2f} ms")
-        logging.info(f"平均FPS: {avg_fps:.2f}")
-        
-        # 保存检测结果和性能指标
-        self.save_test_results(all_detections)
-        self.visualize_performance_metrics()
-        
-        return all_detections
-    
-    def save_test_results(self, detections):
-        """保存测试结果到JSON文件"""
-        # 保存所有检测结果
-        with open(str(self.test_results_path / "detections.json"), 'w') as f:
-            json.dump(detections, f, indent=4)
-        
-        # 保存性能指标
-        with open(str(self.test_results_path / "performance_metrics.json"), 'w') as f:
-            json.dump(self.metrics, f, indent=4)
-    
-    def visualize_performance_metrics(self):
-        """可视化性能指标"""
-        # 绘制推理时间柱状图
-        plt.figure(figsize=(10, 6))
-        metrics = ['推理时间(ms)', 'FPS']
-        values = [self.metrics['inference_time'] * 1000, self.metrics['fps']]
-        colors = ['blue', 'green']
-        
-        bars = plt.bar(metrics, values, color=colors)
-        
-        # 添加数值标签
-        for bar, val in zip(bars, values):
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.1,
-                     f'{val:.2f}', ha='center', va='bottom', fontsize=10)
-        
-        plt.ylabel('数值', fontproperties=font, fontsize=12)
-        plt.title('模型性能指标', fontproperties=font, fontsize=14)
-        plt.grid(axis='y', linestyle='--', alpha=0.6)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = self.test_results_path / "performance_metrics.png"
-        plt.savefig(str(save_path))
-        plt.close()
-
-def scale_boxes(img_size, boxes, target_size):
-    """将预测框从模型输入尺寸缩放到原始图像尺寸"""
-    # img_size: 模型输入尺寸 (height, width)
-    # boxes: 预测框 (xyxy格式)
-    # target_size: 原始图像尺寸 (height, width)
-    
-    ratio_w = target_size[1] / img_size[1]
-    ratio_h = target_size[0] / img_size[0]
-    
-    scaled_boxes = boxes.clone()
-    scaled_boxes[:, 0] *= ratio_w
-    scaled_boxes[:, 2] *= ratio_w
-    scaled_boxes[:, 1] *= ratio_h
-    scaled_boxes[:, 3] *= ratio_h
-    
-    return scaled_boxes
-
-def main():
-    # 创建数据加载器
-    _, _, test_loader = create_data_loaders()
-    
-    # 构建模型
-    model = build_model()
-    
-    # 加载最佳模型权重
-    best_model_path = WEIGHTS_PATH / "best_model.pth"
-    if best_model_path.exists():
-        checkpoint = torch.load(best_model_path, map_location=DEVICE)
-        
-        # 如果有EMA模型状态，使用EMA模型
-        if 'ema_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['ema_state_dict'])
-            logging.info("已加载EMA模型权重")
-        else:
-            model.load_state_dict(checkpoint['model_state_dict'])
-            logging.info("已加载模型权重")
-    else:
-        logging.warning(f"找不到模型权重文件: {best_model_path}，使用随机初始化的模型进行测试")
-    
-    # 创建测试器
-    tester = Tester(
-        model=model,
-        test_loader=test_loader,
-        device=DEVICE,
-        confidence_threshold=CONF_THRESH,
-        iou_threshold=IOU_THRESH
-    )
-    
-    # 执行测试
-    detections = tester.test()
-    
-    logging.info(f"测试完成，检测到 {sum(len(d['detections']) for d in detections)} 个目标")
-
-if __name__ == "__main__":
-    main()
-
-
-    import os
-import time
-import datetime
+import argparse
 import numpy as np
+from tqdm import tqdm
+import xml.etree.ElementTree as ET
+from collections import Counter
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams['font.family'] = 'SimHei'
+matplotlib.rcParams['axes.unicode_minus'] = False
+import cv2
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
-from torch.cuda import amp
-from torch.utils.tensorboard import SummaryWriter
-import matplotlib.pyplot as plt
-from matplotlib.font_manager import FontProperties
-from pathlib import Path
-import logging
-from tqdm import tqdm
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import torchvision.transforms as transforms
+from torchvision.ops import box_iou
 
-from config import *
-from model import build_model
-from data_preparation import create_data_loaders
-from utils.loss import YOLOLoss
-from utils.metrics import compute_ap
-from utils.ema import ModelEMA
-from utils.visualization import visualize_batch
-
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-font = FontProperties(fname=FONT_PATH)
-
-# 配置日志
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler(LOG_PATH / "training.log"),
-        logging.StreamHandler()
-    ]
+# 导入自定义模块
+from model import YOLOv10
+from utils import (
+    setup_logging, setup_seed, 
+    plot_loss_curves, plot_metrics,
+    draw_pr_curve, draw_confusion_matrix,
+    xyxy2xywh, xywh2xyxy, box_area
 )
 
-class Trainer:
-    def __init__(self, model, train_loader, val_loader, device):
-        self.model = model.to(device)
-        self.train_loader = train_loader
-        self.val_loader = val_loader
-        self.device = device
-        
-        # 损失函数
-        self.criterion = YOLOLoss(
-            num_classes=NUM_CLASSES,
-            device=device
-        )
-        
-        # 优化器
-        self.optimizer = optim.AdamW(
-            model.parameters(),
-            lr=LEARNING_RATE,
-            weight_decay=WEIGHT_DECAY
-        )
-        
-        # 学习率调度器
-        self.scheduler = CosineAnnealingWarmRestarts(
-            self.optimizer,
-            T_0=EPOCHS // 5,
-            T_mult=2,
-            eta_min=LEARNING_RATE / 100
-        )
-        
-        # 使用EMA模型
-        if USE_EMA:
-            self.ema_model = ModelEMA(model, decay=0.9998)
-        
-        # TensorBoard日志记录器
-        self.writer = SummaryWriter(log_dir=str(LOG_PATH))
-        
-        # 混合精度训练
-        self.scaler = amp.GradScaler()
-        
-        # 保存最佳模型
-        self.best_map = 0.0
-        
-        # 训练历史
-        self.history = {
-            'train_loss': [],
-            'val_loss': [],
-            'map': [],
-            'learning_rates': []
-        }
+# 设置路径常量
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(os.path.dirname(ROOT_DIR), "data")
+RESULTS_DIR = os.path.join(ROOT_DIR, "results")
+MODEL_DIR = os.path.join(RESULTS_DIR, "models")
+LOGS_DIR = os.path.join(RESULTS_DIR, "logs")
+PLOTS_DIR = os.path.join(RESULTS_DIR, "plots")
+VIS_DIR = os.path.join(RESULTS_DIR, "visualization")
+
+# 创建必要的目录
+os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+os.makedirs(PLOTS_DIR, exist_ok=True)
+os.makedirs(VIS_DIR, exist_ok=True)
+
+# 配置参数
+class Config:
+    # 数据集参数
+    data_root = os.path.join(DATA_DIR, "insects")
+    train_dir = os.path.join(data_root, "train")
+    val_dir = os.path.join(data_root, "val")
+    test_dir = os.path.join(data_root, "test")
     
-    def train_one_epoch(self, epoch):
-        self.model.train()
-        total_loss = 0
-        batch_losses = []
-        
-        # 进度条
-        progress_bar = tqdm(enumerate(self.train_loader), total=len(self.train_loader))
-        
-        for batch_idx, (images, targets, img_ids) in progress_bar:
-            # 将图像和目标移到设备
-            images = [img.to(self.device) for img in images]
-            for target in targets:
-                for k, v in target.items():
-                    target[k] = v.to(self.device)
-            
-            # 梯度归零
-            self.optimizer.zero_grad()
-            
-            # 前向传播（使用混合精度）
-            with amp.autocast():
-                predictions = self.model(torch.stack(images))
-                loss = self.criterion(predictions, targets)
-            
-            # 反向传播
-            self.scaler.scale(loss).backward()
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
-            
-            # 更新EMA模型
-            if USE_EMA:
-                self.ema_model.update(self.model)
-            
-            # 更新学习率
-            if batch_idx % 10 == 0:
-                self.history['learning_rates'].append(self.optimizer.param_groups[0]['lr'])
-            
-            # 累积损失
-            total_loss += loss.item()
-            batch_losses.append(loss.item())
-            
-            # 更新进度条
-            progress_bar.set_description(
-                f"Epoch {epoch+1}/{EPOCHS} | Loss: {loss.item():.6f}"
-            )
-            
-            # 可视化每100个批次的第一个样本
-            if batch_idx % 100 == 0:
-                with torch.no_grad():
-                    sample_img = images[0].detach().cpu()
-                    sample_target = {k: v.detach().cpu() for k, v in targets[0].items()}
-                    
-                    fig = visualize_batch(sample_img, sample_target, img_ids[0], epoch)
-                    self.writer.add_figure(f'train/sample_batch_{batch_idx}', fig, epoch)
-                    fig_path = VISUALIZATION_PATH / f"epoch_{epoch+1}_batch_{batch_idx}.png"
-                    plt.savefig(str(fig_path))
-                    plt.close(fig)
-        
-        # 一个epoch结束后，更新学习率
-        self.scheduler.step()
-        
-        # 计算平均损失
-        avg_loss = total_loss / len(self.train_loader)
-        self.history['train_loss'].append(avg_loss)
-        
-        # TensorBoard记录
-        self.writer.add_scalar('Loss/train', avg_loss, epoch)
-        
-        # 绘制批次损失图
-        self.plot_batch_losses(batch_losses, epoch)
-        
-        return avg_loss
+    # 模型参数
+    img_size = 640
+    batch_size = 4
+    num_workers = 4
     
-    def validate(self, epoch):
-        if USE_EMA:
-            eval_model = self.ema_model.ema
+    # 训练参数
+    epochs = 100
+    lr = 1e-3
+    weight_decay = 5e-4
+    momentum = 0.9
+    
+    # 早停参数
+    patience = 5
+    
+    # 优化器参数
+    optimizer = "AdamW"  # "SGD" or "Adam" or "AdamW"
+    scheduler = "cosine"  # "step" or "cosine"
+    
+    # 数据增强
+    mosaic_prob = 0.5
+    mixup_prob = 0.3
+    
+    # 损失函数权重
+    lambda_obj = 1.0
+    lambda_noobj = 0.5
+    lambda_cls = 0.5
+    lambda_box = 1.0
+    
+    # 评估参数
+    conf_thres = 0.25
+    nms_thres = 0.45
+    iou_thres = 0.5
+    
+    # 日志参数
+    log_interval = 10
+    save_interval = 5
+    eval_interval = 1
+    
+    # 可视化参数
+    vis_batch = 2
+    vis_samples = 4
+    
+    # 随机种子
+    seed = 42
+
+def get_classes(data_dir):
+    """从数据集中获取所有类别"""
+    classes = set()
+    
+    # 遍历所有训练集标注
+    ann_dir = os.path.join(data_dir, "train", "annotations")
+    for xml_file in os.listdir(ann_dir):
+        if not xml_file.endswith('.xml'):
+            continue
+        
+        tree = ET.parse(os.path.join(ann_dir, xml_file))
+        root = tree.getroot()
+        
+        for obj in root.findall('object'):
+            cls = obj.find('name').text
+            classes.add(cls)
+    
+    return sorted(list(classes))
+
+class InsectsDataset(Dataset):
+    """昆虫检测数据集"""
+    def __init__(self, root_dir, img_size=640, mode='train', transform=None):
+        """
+        初始化数据集
+        Args:
+            root_dir: 数据根目录
+            img_size: 图像大小
+            mode: 'train', 'val' or 'test'
+            transform: 数据变换
+        """
+        self.root_dir = root_dir
+        self.img_size = img_size
+        self.mode = mode
+        self.transform = transform
+        
+        # 加载类别
+        self.classes = get_classes(root_dir)
+        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
+        
+        # 设置目录
+        self.img_dir = os.path.join(root_dir, mode, "images")
+        self.ann_dir = os.path.join(root_dir, mode, "annotations")
+        
+        # 获取所有图像文件名
+        self.img_files = [f for f in os.listdir(self.img_dir) 
+                          if f.endswith(('.jpg', '.jpeg', '.png'))]
+        
+        print(f"加载了 {len(self.img_files)} 个 {mode} 图像")
+        print(f"类别: {self.classes}")
+        
+        # 配置数据增强
+        self.mosaic_prob = 0.5 if mode == 'train' else 0
+        self.mixup_prob = 0.3 if mode == 'train' else 0
+    
+    def __len__(self):
+        return len(self.img_files)
+    
+    def __getitem__(self, idx):
+        # 基础加载
+        if np.random.random() < self.mosaic_prob:
+            img, targets = self.load_mosaic(idx)
         else:
-            eval_model = self.model
+            img, targets = self.load_image_and_targets(idx)
+            
+        # Mixup
+        if np.random.random() < self.mixup_prob:
+            img_mix, targets_mix = self.load_image_and_targets(np.random.randint(0, len(self)))
+            r = np.random.beta(8.0, 8.0)  # 混合比例
+            img = img * r + img_mix * (1 - r)
+            targets = torch.cat([targets, targets_mix], dim=0)
+            
+        # 应用其他变换
+        if self.transform:
+            img = self.transform(img)
         
-        eval_model.eval()
-        total_loss = 0
-        all_predictions = []
+        return img, targets
+    
+    def load_image_and_targets(self, idx):
+        """加载单张图像及其标注"""
+        # 加载图像
+        img_file = self.img_files[idx]
+        img_path = os.path.join(self.img_dir, img_file)
+        img = cv2.imread(img_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        
+        # 获取原始尺寸
+        h, w = img.shape[:2]
+        
+        # 缩放系数
+        scale_w, scale_h = self.img_size / w, self.img_size / h
+        
+        # 缩放图像
+        img = cv2.resize(img, (self.img_size, self.img_size))
+        
+        # 转换为tensor
+        img = img.transpose(2, 0, 1)  # HWC -> CHW
+        img = torch.from_numpy(img).float() / 255.0
+        
+        # 加载标注
+        ann_file = os.path.splitext(img_file)[0] + '.xml'
+        ann_path = os.path.join(self.ann_dir, ann_file)
+        
+        boxes = []
+        classes = []
+        
+        if os.path.exists(ann_path):
+            tree = ET.parse(ann_path)
+            root = tree.getroot()
+            
+            for obj in root.findall('object'):
+                cls = obj.find('name').text
+                if cls not in self.class_to_idx:
+                    continue
+                
+                cls_id = self.class_to_idx[cls]
+                
+                bbox = obj.find('bndbox')
+                xmin = float(bbox.find('xmin').text)
+                ymin = float(bbox.find('ymin').text)
+                xmax = float(bbox.find('xmax').text)
+                ymax = float(bbox.find('ymax').text)
+                
+                # 缩放边界框
+                xmin *= scale_w
+                ymin *= scale_h
+                xmax *= scale_w
+                ymax *= scale_h
+                
+                # 检查边界框有效性
+                if xmax <= xmin or ymax <= ymin:
+                    continue
+                
+                # 裁剪到图像边界
+                xmin = max(0, min(self.img_size - 1, xmin))
+                ymin = max(0, min(self.img_size - 1, ymin))
+                xmax = max(0, min(self.img_size - 1, xmax))
+                ymax = max(0, min(self.img_size - 1, ymax))
+                
+                # 转换为中心点+宽高格式
+                cx = (xmin + xmax) / 2.0
+                cy = (ymin + ymax) / 2.0
+                w = xmax - xmin
+                h = ymax - ymin
+                
+                # 归一化到[0, 1]
+                cx /= self.img_size
+                cy /= self.img_size
+                w /= self.img_size
+                h /= self.img_size
+                
+                boxes.append([cx, cy, w, h])
+                classes.append(cls_id)
+        
+        if len(boxes) == 0:
+            # 如果没有目标，返回空标注
+            targets = torch.zeros((0, 5))
+        else:
+            # 组合框和类别，格式: [cls, cx, cy, w, h]
+            targets = torch.zeros((len(boxes), 5))
+            targets[:, 0] = torch.tensor(classes)
+            targets[:, 1:5] = torch.tensor(boxes)
+        
+        return img, targets
+    
+    def load_mosaic(self, idx):
+        """Mosaic数据增强"""
+        # 随机选择其他3张图像
+        indices = [idx] + [np.random.randint(0, len(self)) for _ in range(3)]
+        
+        # 创建mosaic图像
+        mosaic_img = torch.zeros((3, self.img_size, self.img_size), dtype=torch.float32)
+        
+        # 随机生成拼接点
+        cx, cy = self.img_size // 2, self.img_size // 2
+        xc = int(np.random.uniform(cx * 0.5, cx * 1.5))
+        yc = int(np.random.uniform(cy * 0.5, cy * 1.5))
+        
+        # 保存所有目标
         all_targets = []
         
-        with torch.no_grad():
-            progress_bar = tqdm(enumerate(self.val_loader), total=len(self.val_loader))
+        for i, idx in enumerate(indices):
+            img, targets = self.load_image_and_targets(idx)
             
-            for batch_idx, (images, targets, img_ids) in progress_bar:
-                # 将图像和目标移到设备
-                images = [img.to(self.device) for img in images]
-                for target in targets:
-                    for k, v in target.items():
-                        target[k] = v.to(self.device)
+            # 获取图像尺寸
+            h, w = img.shape[1:]
+            
+            # 确定放置位置
+            if i == 0:  # 左上
+                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h
+            elif i == 1:  # 右上
+                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, self.img_size), yc
+                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            elif i == 2:  # 左下
+                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(self.img_size, yc + h)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+            elif i == 3:  # 右下
+                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, self.img_size), min(self.img_size, yc + h)
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            
+            # 放置图像
+            mosaic_img[:, y1a:y2a, x1a:x2a] = img[:, y1b:y2b, x1b:x2b]
+            
+            # 调整边界框坐标
+            if len(targets) > 0:
+                # 调整中心坐标
+                targets_cp = targets.clone()
+                targets_cp[:, 1:3] = targets_cp[:, 1:3] * torch.tensor([w, h])
+                targets_cp[:, 1] = targets_cp[:, 1] - x1b + x1a
+                targets_cp[:, 2] = targets_cp[:, 2] - y1b + y1a
                 
-                # 前向传播
-                predictions = eval_model(torch.stack(images))
-                loss = self.criterion(predictions, targets)
+                # 调整宽高
+                targets_cp[:, 3:5] = targets_cp[:, 3:5] * torch.tensor([w, h])
                 
-                # 累积损失
-                total_loss += loss.item()
+                # 归一化
+                targets_cp[:, 1:5] /= self.img_size
                 
-                # 更新进度条
-                progress_bar.set_description(
-                    f"Validation | Loss: {loss.item():.6f}"
-                )
+                # 过滤无效框
+                valid_targets = targets_cp.clone()
+                valid_targets[:, 1:3] = torch.clamp(valid_targets[:, 1:3], 0, 1)
                 
-                # 收集预测和目标
-                for pred, tgt in zip(predictions, targets):
-                    all_predictions.append(pred)
-                    all_targets.append(tgt)
-                
-                # 可视化每50个批次的第一个样本
-                if batch_idx % 50 == 0:
-                    sample_img = images[0].detach().cpu()
-                    sample_target = {k: v.detach().cpu() for k, v in targets[0].items()}
-                    
-                    fig = visualize_batch(sample_img, sample_target, img_ids[0], epoch, is_validation=True)
-                    self.writer.add_figure(f'val/sample_batch_{batch_idx}', fig, epoch)
-                    fig_path = VISUALIZATION_PATH / f"val_epoch_{epoch+1}_batch_{batch_idx}.png"
-                    plt.savefig(str(fig_path))
-                    plt.close(fig)
+                # 添加到目标列表
+                all_targets.append(valid_targets)
         
-        # 计算平均损失
-        avg_loss = total_loss / len(self.val_loader)
-        self.history['val_loss'].append(avg_loss)
-        
-        # 计算mAP
-        map_score = compute_ap(all_predictions, all_targets)
-        self.history['map'].append(map_score)
-        
-        # TensorBoard记录
-        self.writer.add_scalar('Loss/val', avg_loss, epoch)
-        self.writer.add_scalar('Metrics/mAP', map_score, epoch)
-        
-        # 保存最佳模型
-        if map_score > self.best_map:
-            self.best_map = map_score
-            self.save_model(epoch, is_best=True)
-        
-        logging.info(f"Validation - Loss: {avg_loss:.6f}, mAP: {map_score:.6f}")
-        
-        return avg_loss, map_score
-    
-    def train(self, epochs):
-        logging.info(f"开始训练YOLOv7-Swin，总共{epochs}个epochs")
-        
-        start_time = time.time()
-        
-        for epoch in range(epochs):
-            epoch_start_time = time.time()
-            
-            # 训练一个epoch
-            train_loss = self.train_one_epoch(epoch)
-            
-            # 验证
-            val_loss, map_score = self.validate(epoch)
-            
-            # 保存模型（每10个epoch或最后一个epoch）
-            if (epoch + 1) % 10 == 0 or epoch == epochs - 1:
-                self.save_model(epoch)
-            
-            # 绘制学习率曲线
-            self.plot_learning_rate_curve(epoch)
-            
-            # 绘制损失曲线
-            self.plot_loss_curves(epoch)
-            
-            # 绘制mAP曲线
-            self.plot_map_curve(epoch)
-            
-            epoch_time = time.time() - epoch_start_time
-            logging.info(f"Epoch {epoch+1}/{epochs} 完成，耗时: {datetime.timedelta(seconds=int(epoch_time))}")
-            logging.info(f"训练损失: {train_loss:.6f}, 验证损失: {val_loss:.6f}, mAP: {map_score:.6f}")
-        
-        total_time = time.time() - start_time
-        logging.info(f"训练完成，总耗时: {datetime.timedelta(seconds=int(total_time))}")
-        logging.info(f"最佳mAP: {self.best_map:.6f}")
-        
-        # 关闭TensorBoard writer
-        self.writer.close()
-    
-    def save_model(self, epoch, is_best=False):
-        """保存模型权重"""
-        if is_best:
-            save_path = WEIGHTS_PATH / "best_model.pth"
+        # 合并所有目标
+        if len(all_targets) > 0:
+            all_targets = torch.cat(all_targets, dim=0)
+            # 过滤掉超出边界或太小的框
+            valid = (all_targets[:, 3] > 0.01) & (all_targets[:, 4] > 0.01)
+            all_targets = all_targets[valid]
         else:
-            save_path = WEIGHTS_PATH / f"model_epoch_{epoch+1}.pth"
+            all_targets = torch.zeros((0, 5))
         
-        # 保存模型状态字典
-        state_dict = {
-            'epoch': epoch + 1,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'best_map': self.best_map,
-            'history': self.history
-        }
-        
-        # 如果使用EMA，保存EMA模型状态
-        if USE_EMA:
-            state_dict['ema_state_dict'] = self.ema_model.ema.state_dict()
-        
-        torch.save(state_dict, str(save_path))
-        logging.info(f"模型已保存到 {save_path}")
-    
-    def plot_batch_losses(self, batch_losses, epoch):
-        """绘制一个epoch中所有批次的损失曲线"""
-        plt.figure(figsize=(10, 6))
-        plt.plot(batch_losses, color='blue', alpha=0.8)
-        plt.xlabel('批次', fontproperties=font, fontsize=12)
-        plt.ylabel('损失值', fontproperties=font, fontsize=12)
-        plt.title(f'第 {epoch+1} 轮训练批次损失曲线', fontproperties=font, fontsize=14)
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = VISUALIZATION_PATH / f"epoch_{epoch+1}_batch_losses.png"
-        plt.savefig(str(save_path))
-        
-        # 添加到TensorBoard
-        self.writer.add_figure('Train/batch_losses', plt.gcf(), epoch)
-        
-        plt.close()
-    
-    def plot_learning_rate_curve(self, epoch):
-        """绘制学习率变化曲线"""
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.history['learning_rates'], color='green', alpha=0.8)
-        plt.xlabel('优化步数', fontproperties=font, fontsize=12)
-        plt.ylabel('学习率', fontproperties=font, fontsize=12)
-        plt.title('学习率变化曲线', fontproperties=font, fontsize=14)
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = VISUALIZATION_PATH / f"learning_rate_curve_epoch_{epoch+1}.png"
-        plt.savefig(str(save_path))
-        
-        # 添加到TensorBoard
-        self.writer.add_figure('Train/learning_rate', plt.gcf(), epoch)
-        
-        plt.close()
-    
-    def plot_loss_curves(self, epoch):
-        """绘制训练和验证损失曲线"""
-        plt.figure(figsize=(10, 6))
-        epochs = list(range(1, len(self.history['train_loss']) + 1))
-        
-        plt.plot(epochs, self.history['train_loss'], 'b-', label='训练损失', alpha=0.8)
-        plt.plot(epochs, self.history['val_loss'], 'r-', label='验证损失', alpha=0.8)
-        
-        plt.xlabel('轮次', fontproperties=font, fontsize=12)
-        plt.ylabel('损失值', fontproperties=font, fontsize=12)
-        plt.title('训练和验证损失曲线', fontproperties=font, fontsize=14)
-        plt.legend(prop=font)
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = VISUALIZATION_PATH / f"loss_curves_epoch_{epoch+1}.png"
-        plt.savefig(str(save_path))
-        
-        # 添加到TensorBoard
-        self.writer.add_figure('Train/loss_curves', plt.gcf(), epoch)
-        
-        plt.close()
-    
-    def plot_map_curve(self, epoch):
-        """绘制mAP变化曲线"""
-        plt.figure(figsize=(10, 6))
-        epochs = list(range(1, len(self.history['map']) + 1))
-        
-        plt.plot(epochs, self.history['map'], 'g-', alpha=0.8)
-        
-        plt.xlabel('轮次', fontproperties=font, fontsize=12)
-        plt.ylabel('mAP', fontproperties=font, fontsize=12)
-        plt.title('平均精度(mAP)变化曲线', fontproperties=font, fontsize=14)
-        plt.grid(True, linestyle='--', alpha=0.6)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = VISUALIZATION_PATH / f"map_curve_epoch_{epoch+1}.png"
-        plt.savefig(str(save_path))
-        
-        # 添加到TensorBoard
-        self.writer.add_figure('Train/map_curve', plt.gcf(), epoch)
-        
-        plt.close()
+        return mosaic_img, all_targets
 
-def main():
-    # 创建数据加载器
-    train_loader, val_loader, test_loader = create_data_loaders()
+# 损失函数定义
+class YOLOLoss(nn.Module):
+    """改进的YOLO损失函数"""
+    def __init__(self, num_classes, anchors, img_size=640, 
+                 lambda_obj=1.0, lambda_noobj=0.5, lambda_cls=0.5, lambda_box=1.0):
+        super().__init__()
+        self.num_classes = num_classes
+        self.img_size = img_size
+        
+        # 损失权重
+        self.lambda_obj = lambda_obj
+        self.lambda_noobj = lambda_noobj
+        self.lambda_cls = lambda_cls
+        self.lambda_box = lambda_box
+        
+        # 转换格式: [s, m, l] x 3 anchors
+        self.register_buffer('anchors', anchors)
+        self.strides = torch.tensor([8, 16, 32])
+        
+        # 定义损失函数
+        self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        self.mse = nn.MSELoss(reduction='none')
+        
+        # 对焦损失 (Focal Loss) 参数
+        self.alpha = 0.25
+        self.gamma = 2.0
+        
+    def forward(self, predictions, targets):
+        """计算损失
+        Args:
+            predictions: 模型输出，格式为3个特征图的列表
+            targets: 目标，格式为[batch_idx, class, x, y, w, h]
+        """
+        device = predictions[0].device
+        batch_size = predictions[0].size(0)
+        
+        # 初始化损失
+        loss_obj = torch.zeros(1, device=device)
+        loss_noobj = torch.zeros(1, device=device)
+        loss_box = torch.zeros(1, device=device)
+        loss_cls = torch.zeros(1, device=device)
+        
+        # 按批次处理targets
+        targets_by_batch = [[] for _ in range(batch_size)]
+        for target_idx in range(len(targets)):
+            batch_idx = 0  # 单个批次的情况
+            if len(targets) > 1:  # 处理多个批次
+                if len(targets.shape) > 1 and targets.shape[1] > 0:
+                    batch_idx = int(targets[target_idx, 0])
+            if batch_idx < batch_size:  # 确保batch_idx有效
+                targets_by_batch[batch_idx].append(targets[target_idx])
+        
+        # 处理每个特征图
+        for level, pred in enumerate(predictions):
+            # 特征图大小
+            bs, _, h, w = pred.shape
+            
+            # 重塑预测结果: [B, 3*(5+C), H, W] -> [B, 3, H, W, 5+C]
+            pred = pred.view(bs, 3, 5 + self.num_classes, h, w)
+            pred = pred.permute(0, 1, 3, 4, 2).contiguous()
+            
+            # 获取当前特征图的anchors和stride
+            anchor_vec = self.anchors[level]
+            stride = self.strides[level]
+            
+            # 创建网格
+            grid_y, grid_x = torch.meshgrid([torch.arange(h, device=device), 
+                                            torch.arange(w, device=device)])
+            grid = torch.stack((grid_x, grid_y), 2).expand(1, 3, h, w, 2).float()
+            
+            # 输出预测的组件
+            pred_xy = torch.sigmoid(pred[..., 0:2])  # 中心点相对网格的偏移 (0-1)
+            pred_wh = torch.exp(pred[..., 2:4]) * anchor_vec.unsqueeze(2).unsqueeze(3)  # 宽高相对anchor的缩放
+            pred_obj = torch.sigmoid(pred[..., 4:5])  # 目标置信度
+            pred_cls = torch.sigmoid(pred[..., 5:])  # 类别概率
+            
+            # 计算预测框绝对坐标 (0-640)
+            pred_boxes = torch.zeros_like(pred[..., :4])
+            pred_boxes[..., 0:2] = (pred_xy + grid) * stride  # 绝对xy
+            pred_boxes[..., 2:4] = pred_wh * stride  # 绝对wh
+            
+            # 处理每个batch
+            for batch_idx in range(batch_size):
+                batch_targets = targets_by_batch[batch_idx]
+                if not batch_targets:  # 如果该batch没有目标
+                    continue
+                
+                targets_tensor = torch.stack(batch_targets)
+                
+                # 提取目标的坐标和类别
+                tcls = targets_tensor[:, 0].long()
+                tx = targets_tensor[:, 1] * self.img_size
+                ty = targets_tensor[:, 2] * self.img_size
+                tw = targets_tensor[:, 3] * self.img_size
+                th = targets_tensor[:, 4] * self.img_size
+                
+                # 过滤掉宽高太小的目标
+                valid = (tw > 1) & (th > 1)
+                if not valid.any():
+                    continue
+                
+                tcls = tcls[valid]
+                tx = tx[valid]
+                ty = ty[valid]
+                tw = tw[valid]
+                th = th[valid]
+                
+                # 将目标转换为当前特征图上的坐标
+                gx = tx / stride
+                gy = ty / stride
+                gw = tw / stride
+                gh = th / stride
+                
+                # 计算网格索引
+                gi = gx.long().clamp(0, w - 1)
+                gj = gy.long().clamp(0, h - 1)
+                
+                # 计算最佳匹配的anchor索引
+                target_boxes = torch.stack([torch.zeros_like(gx), torch.zeros_like(gy), gw, gh], 1)
+                anchor_shapes = torch.cat((torch.zeros(len(anchor_vec), 2), anchor_vec), 1)
+                
+                # 计算IOU以找到最佳anchor
+                anch_ious = box_iou(
+                    xyxy2xywh(target_boxes), 
+                    xyxy2xywh(anchor_shapes)
+                )
+                best_ious, best_n = anch_ious.max(1)
+                
+                # 构建目标张量
+                for t_idx in range(len(tcls)):
+                    c = tcls[t_idx]
+                    i, j = gi[t_idx], gj[t_idx]
+                    a = best_n[t_idx]
+                    
+                    # 目标坐标
+                    gx_t, gy_t = gx[t_idx] - gi[t_idx], gy[t_idx] - gj[t_idx]
+                    gw_t, gh_t = gw[t_idx], gh[t_idx]
+                    
+                    # 目标框中心偏移和宽高
+                    target_xy = torch.tensor([gx_t, gy_t], device=device)
+                    target_wh = torch.tensor([gw_t, gh_t], device=device) / anchor_vec[a]
+                    
+                    # 更新各项损失
+                    # 置信度损失 (对象和非对象)
+                    obj_mask = torch.zeros_like(pred_obj[batch_idx])
+                    obj_mask[a, j, i] = 1
+                    noobj_mask = 1 - obj_mask
+                    
+                    # 对象损失 (置信度)
+                    loss_obj += self.bce(
+                        pred_obj[batch_idx], 
+                        obj_mask
+                    ).sum() * self.lambda_obj
+                    
+                    # 非对象损失 (置信度)
+                    loss_noobj += self.bce(
+                        pred_obj[batch_idx], 
+                        torch.zeros_like(pred_obj[batch_idx])
+                    ).sum() * self.lambda_noobj * noobj_mask
+                    
+                    # 框坐标损失
+                    pred_xy_t = pred_xy[batch_idx, a, j, i]
+                    loss_xy = self.mse(pred_xy_t, target_xy).sum() * self.lambda_box
+                    
+                    # 转换为对数空间计算宽高损失
+                    pred_wh_t = torch.log(pred_wh[batch_idx, a, j, i] / anchor_vec[a] + 1e-6)
+                    target_wh = torch.log(target_wh + 1e-6)
+                    loss_wh = self.mse(pred_wh_t, target_wh).sum() * self.lambda_box
+                    
+                    loss_box += loss_xy + loss_wh
+                    
+                    # 类别损失
+                    if self.num_classes > 1:  # 多类别情况
+                        target_cls = torch.zeros_like(pred_cls[batch_idx, a, j, i])
+                        target_cls[c] = 1
+                        loss_cls += self.focal_loss(
+                            pred_cls[batch_idx, a, j, i], 
+                            target_cls
+                        ).sum() * self.lambda_cls
+        
+        # 归一化损失
+        num_targets = sum(len(t) for t in targets_by_batch) + 1e-6  # 防止除零
+        loss_box /= num_targets
+        loss_obj /= num_targets
+        loss_noobj /= batch_size * 3 * h * w  # 归一化非对象损失
+        loss_cls /= num_targets
+        
+        # 总损失
+        total_loss = loss_box + loss_obj + loss_noobj + loss_cls
+        
+        # 返回各项损失
+        return total_loss, {
+            'box': loss_box.item(),
+            'obj': loss_obj.item(),
+            'noobj': loss_noobj.item(),
+            'cls': loss_cls.item(),
+            'total': total_loss.item()
+        }
     
-    # 构建模型
-    model = build_model()
+    def focal_loss(self, pred, target):
+        """焦点损失"""
+        # 二值交叉熵
+        bce = self.bce(pred, target)
+        
+        # 计算pt
+        pt = torch.exp(-bce)
+        # 计算焦点损失
+        alpha_t = target * self.alpha + (1 - target) * (1 - self.alpha)
+        focal_loss = alpha_t * (1 - pt) ** self.gamma * bce
+        
+        return focal_loss
+
+# 训练函数
+def train(cfg):
+    """训练主函数"""
+    setup_seed(cfg.seed)
+    logger = setup_logging(os.path.join(LOGS_DIR, "train.log"))
     
-    # 创建训练器
-    trainer = Trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        device=DEVICE
+    # 获取类别
+    classes = get_classes(cfg.data_root)
+    num_classes = len(classes)
+    logger.info(f"类别数: {num_classes}, 类别: {classes}")
+    
+    # 数据增强
+    train_transform = transforms.Compose([
+        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomRotation(10),
+    ])
+    
+    # 创建数据集
+    train_dataset = InsectsDataset(
+        cfg.data_root, cfg.img_size, 'train', train_transform
+    )
+    val_dataset = InsectsDataset(
+        cfg.data_root, cfg.img_size, 'val', None
     )
     
-    # 开始训练
-    trainer.train(EPOCHS)
-
-if __name__ == "__main__":
-    main()
-
-
-    import os
-import torch
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.font_manager import FontProperties
-from pathlib import Path
-import logging
-from tqdm import tqdm
+    # 创建数据加载器
+    train_loader = DataLoader(
+        train_dataset, batch_size=cfg.batch_size, shuffle=True,
+        num_workers=cfg.num_workers, pin_memory=True,
+        collate_fn=collate_fn
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=cfg.batch_size, shuffle=False,
+        num_workers=cfg.num_workers, pin_memory=True,
+        collate_fn=collate_fn
+    )
+    
+    # 创建模型
+    model = YOLOv10(num_classes=num_classes, img_size=cfg.img_size)
+    model.cuda()
+    
+    # 记录模型信息
+    pytorch_total_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"模型参数量: {pytorch_total_params / 1e6:.2f}M")
+    
+    # 创建损失函数
+    criterion = YOLOLoss(
+        num_classes=num_classes,
+        anchors=model.anchors,
+        img_size=cfg.img_size,
+        lambda_obj=cfg.lambda_obj,
+        lambda# filepath: c:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\scripts\train.py
+import os
+import time
 import json
-import seaborn as sns
-from sklearn.metrics import confusion_matrix, precision_recall_curve, average_precision_score
+import argparse
+import numpy as np
+from tqdm import tqdm
+import xml.etree.ElementTree as ET
+from collections import Counter
+import matplotlib.pyplot as plt
+import matplotlib
+matplotlib.rcParams['font.family'] = 'SimHei'
+matplotlib.rcParams['axes.unicode_minus'] = False
 import cv2
 
-from config import *
-from model import build_model
-from data_preparation import create_data_loaders
-from utils.metrics import compute_ap, box_iou, ap_per_class, xywh2xyxy
-from utils.visualization import visualize_predictions
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import torchvision.transforms as transforms
+from torchvision.ops import box_iou
 
-# 设置中文字体
-plt.rcParams['font.sans-serif'] = ['SimHei']
-plt.rcParams['axes.unicode_minus'] = False
-font = FontProperties(fname=FONT_PATH)
-
-# 配置日志
-logging.basicConfig(
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    level=logging.INFO,
-    handlers=[
-        logging.FileHandler(LOG_PATH / "validation.log"),
-        logging.StreamHandler()
-    ]
+# 导入自定义模块
+from model import YOLOv10
+from utils import (
+    setup_logging, setup_seed, 
+    plot_loss_curves, plot_metrics,
+    draw_pr_curve, draw_confusion_matrix,
+    xyxy2xywh, xywh2xyxy, box_area
 )
 
-class Validator:
-    def __init__(self, model, val_loader, device, confidence_threshold=0.25, iou_threshold=0.45):
-        self.model = model.to(device)
-        self.val_loader = val_loader
-        self.device = device
-        self.confidence_threshold = confidence_threshold
-        self.iou_threshold = iou_threshold
-        
-        # 确保结果目录存在
-        self.validation_results_path = METRIC_PATH / "validation"
-        self.validation_images_path = VISUALIZATION_PATH / "validation"
-        self.validation_results_path.mkdir(parents=True, exist_ok=True)
-        self.validation_images_path.mkdir(parents=True, exist_ok=True)
-        
-        # 存储结果
-        self.class_ap = {cls_name: 0.0 for cls_name in VOC_CLASSES}
-        self.predictions = []
-        self.targets = []
-        self.confusion_matrix = np.zeros((NUM_CLASSES, NUM_CLASSES))
-        
-    def validate(self):
-        logging.info("开始验证...")
-        self.model.eval()
-        
-        # 收集所有类别的预测和真实标签
-        all_pred_boxes = []  # 所有预测框
-        all_pred_labels = []  # 所有预测标签
-        all_pred_scores = []  # 所有预测分数
-        all_true_boxes = []  # 所有真实框
-        all_true_labels = []  # 所有真实标签
-        
-        with torch.no_grad():
-            progress_bar = tqdm(enumerate(self.val_loader), total=len(self.val_loader))
-            
-            for batch_idx, (images, targets, img_ids) in progress_bar:
-                # 将图像和目标移到设备
-                images = [img.to(self.device) for img in images]
-                for target in targets:
-                    for k, v in target.items():
-                        target[k] = v.to(self.device)
-                
-                # 前向传播获取预测结果
-                predictions = self.model(torch.stack(images))
-                
-                # 处理每张图像的预测和目标
-                for i, (pred, target, img_id) in enumerate(zip(predictions, targets, img_ids)):
-                    # 筛选满足置信度阈值的检测结果
-                    mask = pred[:, 4] > self.confidence_threshold
-                    pred_filtered = pred[mask]
-                    
-                    if len(pred_filtered) > 0:
-                        # 获取预测框和类别
-                        pred_boxes = pred_filtered[:, :4]  # x, y, w, h 格式
-                        pred_scores = pred_filtered[:, 4]
-                        pred_class_scores = pred_filtered[:, 5:]
-                        pred_labels = torch.argmax(pred_class_scores, dim=1)
-                        
-                        # 转换为 xyxy 格式
-                        pred_boxes_xyxy = xywh2xyxy(pred_boxes)
-                        
-                        # 保存预测结果
-                        for box, label, score in zip(pred_boxes_xyxy.cpu().numpy(), 
-                                                    pred_labels.cpu().numpy(), 
-                                                    pred_scores.cpu().numpy()):
-                            all_pred_boxes.append(box)
-                            all_pred_labels.append(label)
-                            all_pred_scores.append(score)
-                    
-                    # 获取真实标注
-                    true_boxes = target['boxes']  # yolo 格式 (x_center, y_center, width, height)
-                    true_labels = target['labels']
-                    
-                    # 转换为 xyxy 格式
-                    true_boxes_xyxy = xywh2xyxy(true_boxes)
-                    
-                    for box, label in zip(true_boxes_xyxy.cpu().numpy(), true_labels.cpu().numpy()):
-                        all_true_boxes.append(box)
-                        all_true_labels.append(label)
-                    
-                    # 可视化每50批次的第一个样本
-                    if batch_idx % 50 == 0 and i == 0:
-                        sample_img = images[i].detach().cpu()
-                        sample_pred = pred_filtered.detach().cpu() if len(pred_filtered) > 0 else None
-                        sample_target = {k: v.detach().cpu() for k, v in target.items()}
-                        
-                        # 可视化预测结果
-                        fig = visualize_predictions(
-                            sample_img, 
-                            sample_pred, 
-                            sample_target, 
-                            img_id,
-                            VOC_CLASSES
-                        )
-                        
-                        save_path = self.validation_images_path / f"val_sample_{batch_idx}.png"
-                        plt.savefig(str(save_path))
-                        plt.close(fig)
-        
-        # 转换为numpy数组
-        all_pred_boxes = np.array(all_pred_boxes)
-        all_pred_labels = np.array(all_pred_labels)
-        all_pred_scores = np.array(all_pred_scores)
-        all_true_boxes = np.array(all_true_boxes)
-        all_true_labels = np.array(all_true_labels)
-        
-        # 计算各类别AP和mAP
-        stats = []
-        
-        # 检查是否有预测结果
-        if len(all_pred_boxes) > 0:
-            # 计算各类别的AP
-            ap, p, r = ap_per_class(
-                tp=all_pred_boxes,
-                conf=all_pred_scores,
-                pred_cls=all_pred_labels,
-                target_cls=all_true_labels,
-                target_boxes=all_true_boxes,
-                iou_thres=self.iou_threshold
-            )
-            
-            # 存储各类别AP
-            for i, class_name in enumerate(VOC_CLASSES):
-                self.class_ap[class_name] = ap[i] if i < len(ap) else 0.0
-            
-            # 计算mAP
-            map_score = ap.mean()
-            
-            # 打印结果
-            logging.info(f"验证完成，mAP@{self.iou_threshold}: {map_score:.4f}")
-            
-            # 可视化各类别的AP
-            self.visualize_class_ap()
-            
-            # 可视化PR曲线
-            self.visualize_pr_curves(p, r)
-            
-            # 可视化混淆矩阵
-            self.calculate_confusion_matrix(all_pred_labels, all_true_labels)
-            self.visualize_confusion_matrix()
-            
-            # 保存验证结果
-            self.save_validation_results(map_score)
-        else:
-            logging.warning("没有检测到任何目标，无法计算AP")
-            map_score = 0.0
-        
-        return map_score
-    
-    def visualize_class_ap(self):
-        """可视化各类别的AP"""
-        plt.figure(figsize=(14, 8))
-        classes = list(self.class_ap.keys())
-        ap_values = list(self.class_ap.values())
-        
-        # 创建条形图
-        bars = plt.bar(classes, ap_values, color='skyblue')
-        
-        # 在条形上方显示具体数值
-        for bar, ap in zip(bars, ap_values):
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.01,
-                     f'{ap:.3f}', ha='center', va='bottom', rotation=0, fontsize=8)
-        
-        plt.xlabel('类别', fontproperties=font, fontsize=12)
-        plt.ylabel('AP', fontproperties=font, fontsize=12)
-        plt.title('各类别的平均精度(AP)', fontproperties=font, fontsize=14)
-        plt.xticks(rotation=45, ha='right')
-        plt.grid(axis='y', linestyle='--', alpha=0.6)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = self.validation_results_path / "class_ap.png"
-        plt.savefig(str(save_path))
-        plt.close()
-    
-    def visualize_pr_curves(self, p, r):
-        """可视化PR曲线"""
-        plt.figure(figsize=(12, 10))
-        
-        # 绘制每个类别的PR曲线
-        for i, class_name in enumerate(VOC_CLASSES):
-            if i < len(p) and i < len(r):
-                plt.plot(r[i], p[i], linewidth=2, label=f"{class_name} (AP={self.class_ap[class_name]:.3f})")
-        
-        plt.xlabel('召回率', fontproperties=font, fontsize=12)
-        plt.ylabel('精确率', fontproperties=font, fontsize=12)
-        plt.title('各类别的精确率-召回率曲线', fontproperties=font, fontsize=14)
-        plt.xlim(0, 1)
-        plt.ylim(0, 1)
-        plt.grid(linestyle='--', alpha=0.6)
-        plt.legend(loc='lower left', prop=font)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = self.validation_results_path / "pr_curves.png"
-        plt.savefig(str(save_path))
-        plt.close()
-        
-        # 单独绘制每个类别的PR曲线，便于观察
-        os.makedirs(str(self.validation_results_path / "pr_curves"), exist_ok=True)
-        
-        for i, class_name in enumerate(VOC_CLASSES):
-            if i < len(p) and i < len(r):
-                plt.figure(figsize=(8, 6))
-                plt.plot(r[i], p[i], linewidth=2, color='blue')
-                plt.xlabel('召回率', fontproperties=font, fontsize=12)
-                plt.ylabel('精确率', fontproperties=font, fontsize=12)
-                plt.title(f'{class_name} 精确率-召回率曲线 (AP={self.class_ap[class_name]:.3f})', fontproperties=font, fontsize=14)
-                plt.xlim(0, 1)
-                plt.ylim(0, 1)
-                plt.grid(linestyle='--', alpha=0.6)
-                plt.tight_layout()
-                
-                # 保存图像
-                save_path = self.validation_results_path / "pr_curves" / f"{class_name}_pr_curve.png"
-                plt.savefig(str(save_path))
-                plt.close()
-    
-    def calculate_confusion_matrix(self, pred_labels, true_labels):
-        """计算混淆矩阵"""
-        self.confusion_matrix = confusion_matrix(
-            true_labels, 
-            pred_labels, 
-            labels=list(range(NUM_CLASSES))
-        )
-    
-    def visualize_confusion_matrix(self):
-        """可视化混淆矩阵"""
-        plt.figure(figsize=(16, 14))
-        
-        # 计算归一化的混淆矩阵
-        cm_normalized = self.confusion_matrix.astype('float') / (self.confusion_matrix.sum(axis=1)[:, np.newaxis] + 1e-10)
-        
-        # 使用seaborn绘制热图
-        sns.heatmap(
-            cm_normalized, 
-            annot=True, 
-            fmt='.2f', 
-            cmap='Blues',
-            xticklabels=VOC_CLASSES,
-            yticklabels=VOC_CLASSES
-        )
-        
-        plt.xlabel('预测类别', fontproperties=font, fontsize=12)
-        plt.ylabel('真实类别', fontproperties=font, fontsize=12)
-        plt.title('混淆矩阵', fontproperties=font, fontsize=14)
-        plt.xticks(rotation=45, ha='right')
-        plt.yticks(rotation=0)
-        plt.tight_layout()
-        
-        # 保存图像
-        save_path = self.validation_results_path / "confusion_matrix.png"
-        plt.savefig(str(save_path), dpi=300, bbox_inches='tight')
-        plt.close()
-    
-    def save_validation_results(self, map_score):
-        """保存验证结果到JSON文件"""
-        results = {
-            'mAP': float(map_score),
-            'class_AP': {k: float(v) for k, v in self.class_ap.items()},
-            'confidence_threshold': self.confidence_threshold,
-            'iou_threshold': self.iou_threshold
-        }
-        
-        with open(str(self.validation_results_path / "validation_results.json"), 'w') as f:
-            json.dump(results, f, indent=4)
+# 设置路径常量
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(os.path.dirname(ROOT_DIR), "data")
+RESULTS_DIR = os.path.join(ROOT_DIR, "results")
+MODEL_DIR = os.path.join(RESULTS_DIR, "models")
+LOGS_DIR = os.path.join(RESULTS_DIR, "logs")
+PLOTS_DIR = os.path.join(RESULTS_DIR, "plots")
+VIS_DIR = os.path.join(RESULTS_DIR, "visualization")
 
-def main():
-    # 创建数据加载器
-    _, val_loader, _ = create_data_loaders()
+# 创建必要的目录
+os.makedirs(MODEL_DIR, exist_ok=True)
+os.makedirs(LOGS_DIR, exist_ok=True)
+os.makedirs(PLOTS_DIR, exist_ok=True)
+os.makedirs(VIS_DIR, exist_ok=True)
+
+# 配置参数
+class Config:
+    # 数据集参数
+    data_root = os.path.join(DATA_DIR, "insects")
+    train_dir = os.path.join(data_root, "train")
+    val_dir = os.path.join(data_root, "val")
+    test_dir = os.path.join(data_root, "test")
     
-    # 构建模型
-    model = build_model()
+    # 模型参数
+    img_size = 640
+    batch_size = 4
+    num_workers = 4
     
-    # 加载最佳模型权重
-    best_model_path = WEIGHTS_PATH / "best_model.pth"
-    if best_model_path.exists():
-        checkpoint = torch.load(best_model_path, map_location=DEVICE)
+    # 训练参数
+    epochs = 100
+    lr = 1e-3
+    weight_decay = 5e-4
+    momentum = 0.9
+    
+    # 早停参数
+    patience = 5
+    
+    # 优化器参数
+    optimizer = "AdamW"  # "SGD" or "Adam" or "AdamW"
+    scheduler = "cosine"  # "step" or "cosine"
+    
+    # 数据增强
+    mosaic_prob = 0.5
+    mixup_prob = 0.3
+    
+    # 损失函数权重
+    lambda_obj = 1.0
+    lambda_noobj = 0.5
+    lambda_cls = 0.5
+    lambda_box = 1.0
+    
+    # 评估参数
+    conf_thres = 0.25
+    nms_thres = 0.45
+    iou_thres = 0.5
+    
+    # 日志参数
+    log_interval = 10
+    save_interval = 5
+    eval_interval = 1
+    
+    # 可视化参数
+    vis_batch = 2
+    vis_samples = 4
+    
+    # 随机种子
+    seed = 42
+
+def get_classes(data_dir):
+    """从数据集中获取所有类别"""
+    classes = set()
+    
+    # 遍历所有训练集标注
+    ann_dir = os.path.join(data_dir, "train", "annotations")
+    for xml_file in os.listdir(ann_dir):
+        if not xml_file.endswith('.xml'):
+            continue
         
-        # 如果有EMA模型状态，使用EMA模型
-        if 'ema_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['ema_state_dict'])
-            logging.info("已加载EMA模型权重")
-        else:
-            model.load_state_dict(checkpoint['model_state_dict'])
-            logging.info("已加载模型权重")
-    else:
-        logging.warning(f"找不到模型权重文件: {best_model_path}，使用随机初始化的模型进行验证")
+        tree = ET.parse(os.path.join(ann_dir, xml_file))
+        root = tree.getroot()
+        
+        for obj in root.findall('object'):
+            cls = obj.find('name').text
+            classes.add(cls)
     
-    # 创建验证器
-    validator = Validator(
-        model=model,
-        val_loader=val_loader,
-        device=DEVICE,
-        confidence_threshold=CONF_THRESH,
-        iou_threshold=IOU_THRESH
+    return sorted(list(classes))
+
+class InsectsDataset(Dataset):
+    """昆虫检测数据集"""
+    def __init__(self, root_dir, img_size=640, mode='train', transform=None):
+        """
+        初始化数据集
+        Args:
+            root_dir: 数据根目录
+            img_size: 图像大小
+            mode: 'train', 'val' or 'test'
+            transform: 数据变换
+        """
+        self.root_dir = root_dir
+        self.img_size = img_size
+        self.mode = mode
+        self.transform = transform
+        
+        # 加载类别
+        self.classes = get_classes(root_dir)
+        self.class_to_idx = {cls: i for i, cls in enumerate(self.classes)}
+        
+        # 设置目录
+        self.img_dir = os.path.join(root_dir, mode, "images")
+        self.ann_dir = os.path.join(root_dir, mode, "annotations")
+        
+        # 获取所有图像文件名
+        self.img_files = [f for f in os.listdir(self.img_dir) 
+                          if f.endswith(('.jpg', '.jpeg', '.png'))]
+        
+        print(f"加载了 {len(self.img_files)} 个 {mode} 图像")
+        print(f"类别: {self.classes}")
+        
+        # 配置数据增强
+        self.mosaic_prob = 0.5 if mode == 'train' else 0
+        self.mixup_prob = 0.3 if mode == 'train' else 0
+    
+    def __len__(self):
+        return len(self.img_files)
+    
+    def __getitem__(self, idx):
+        # 基础加载
+        if np.random.random() < self.mosaic_prob:
+            img, targets = self.load_mosaic(idx)
+        else:
+            img, targets = self.load_image_and_targets(idx)
+            
+        # Mixup
+        if np.random.random() < self.mixup_prob:
+            img_mix, targets_mix = self.load_image_and_targets(np.random.randint(0, len(self)))
+            r = np.random.beta(8.0, 8.0)  # 混合比例
+            img = img * r + img_mix * (1 - r)
+            targets = torch.cat([targets, targets_mix], dim=0)
+            
+        # 应用其他变换
+        if self.transform:
+            img = self.transform(img)
+        
+        return img, targets
+    
+    def load_image_and_targets(self, idx):
+        """加载单张图像及其标注"""
+        # 加载图像
+        img_file = self.img_files[idx]
+        img_path = os.path.join(self.img_dir, img_file)
+        img = cv2.imread(img_path)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        
+        # 获取原始尺寸
+        h, w = img.shape[:2]
+        
+        # 缩放系数
+        scale_w, scale_h = self.img_size / w, self.img_size / h
+        
+        # 缩放图像
+        img = cv2.resize(img, (self.img_size, self.img_size))
+        
+        # 转换为tensor
+        img = img.transpose(2, 0, 1)  # HWC -> CHW
+        img = torch.from_numpy(img).float() / 255.0
+        
+        # 加载标注
+        ann_file = os.path.splitext(img_file)[0] + '.xml'
+        ann_path = os.path.join(self.ann_dir, ann_file)
+        
+        boxes = []
+        classes = []
+        
+        if os.path.exists(ann_path):
+            tree = ET.parse(ann_path)
+            root = tree.getroot()
+            
+            for obj in root.findall('object'):
+                cls = obj.find('name').text
+                if cls not in self.class_to_idx:
+                    continue
+                
+                cls_id = self.class_to_idx[cls]
+                
+                bbox = obj.find('bndbox')
+                xmin = float(bbox.find('xmin').text)
+                ymin = float(bbox.find('ymin').text)
+                xmax = float(bbox.find('xmax').text)
+                ymax = float(bbox.find('ymax').text)
+                
+                # 缩放边界框
+                xmin *= scale_w
+                ymin *= scale_h
+                xmax *= scale_w
+                ymax *= scale_h
+                
+                # 检查边界框有效性
+                if xmax <= xmin or ymax <= ymin:
+                    continue
+                
+                # 裁剪到图像边界
+                xmin = max(0, min(self.img_size - 1, xmin))
+                ymin = max(0, min(self.img_size - 1, ymin))
+                xmax = max(0, min(self.img_size - 1, xmax))
+                ymax = max(0, min(self.img_size - 1, ymax))
+                
+                # 转换为中心点+宽高格式
+                cx = (xmin + xmax) / 2.0
+                cy = (ymin + ymax) / 2.0
+                w = xmax - xmin
+                h = ymax - ymin
+                
+                # 归一化到[0, 1]
+                cx /= self.img_size
+                cy /= self.img_size
+                w /= self.img_size
+                h /= self.img_size
+                
+                boxes.append([cx, cy, w, h])
+                classes.append(cls_id)
+        
+        if len(boxes) == 0:
+            # 如果没有目标，返回空标注
+            targets = torch.zeros((0, 5))
+        else:
+            # 组合框和类别，格式: [cls, cx, cy, w, h]
+            targets = torch.zeros((len(boxes), 5))
+            targets[:, 0] = torch.tensor(classes)
+            targets[:, 1:5] = torch.tensor(boxes)
+        
+        return img, targets
+    
+    def load_mosaic(self, idx):
+        """Mosaic数据增强"""
+        # 随机选择其他3张图像
+        indices = [idx] + [np.random.randint(0, len(self)) for _ in range(3)]
+        
+        # 创建mosaic图像
+        mosaic_img = torch.zeros((3, self.img_size, self.img_size), dtype=torch.float32)
+        
+        # 随机生成拼接点
+        cx, cy = self.img_size // 2, self.img_size // 2
+        xc = int(np.random.uniform(cx * 0.5, cx * 1.5))
+        yc = int(np.random.uniform(cy * 0.5, cy * 1.5))
+        
+        # 保存所有目标
+        all_targets = []
+        
+        for i, idx in enumerate(indices):
+            img, targets = self.load_image_and_targets(idx)
+            
+            # 获取图像尺寸
+            h, w = img.shape[1:]
+            
+            # 确定放置位置
+            if i == 0:  # 左上
+                x1a, y1a, x2a, y2a = max(xc - w, 0), max(yc - h, 0), xc, yc
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), h - (y2a - y1a), w, h
+            elif i == 1:  # 右上
+                x1a, y1a, x2a, y2a = xc, max(yc - h, 0), min(xc + w, self.img_size), yc
+                x1b, y1b, x2b, y2b = 0, h - (y2a - y1a), min(w, x2a - x1a), h
+            elif i == 2:  # 左下
+                x1a, y1a, x2a, y2a = max(xc - w, 0), yc, xc, min(self.img_size, yc + h)
+                x1b, y1b, x2b, y2b = w - (x2a - x1a), 0, w, min(y2a - y1a, h)
+            elif i == 3:  # 右下
+                x1a, y1a, x2a, y2a = xc, yc, min(xc + w, self.img_size), min(self.img_size, yc + h)
+                x1b, y1b, x2b, y2b = 0, 0, min(w, x2a - x1a), min(y2a - y1a, h)
+            
+            # 放置图像
+            mosaic_img[:, y1a:y2a, x1a:x2a] = img[:, y1b:y2b, x1b:x2b]
+            
+            # 调整边界框坐标
+            if len(targets) > 0:
+                # 调整中心坐标
+                targets_cp = targets.clone()
+                targets_cp[:, 1:3] = targets_cp[:, 1:3] * torch.tensor([w, h])
+                targets_cp[:, 1] = targets_cp[:, 1] - x1b + x1a
+                targets_cp[:, 2] = targets_cp[:, 2] - y1b + y1a
+                
+                # 调整宽高
+                targets_cp[:, 3:5] = targets_cp[:, 3:5] * torch.tensor([w, h])
+                
+                # 归一化
+                targets_cp[:, 1:5] /= self.img_size
+                
+                # 过滤无效框
+                valid_targets = targets_cp.clone()
+                valid_targets[:, 1:3] = torch.clamp(valid_targets[:, 1:3], 0, 1)
+                
+                # 添加到目标列表
+                all_targets.append(valid_targets)
+        
+        # 合并所有目标
+        if len(all_targets) > 0:
+            all_targets = torch.cat(all_targets, dim=0)
+            # 过滤掉超出边界或太小的框
+            valid = (all_targets[:, 3] > 0.01) & (all_targets[:, 4] > 0.01)
+            all_targets = all_targets[valid]
+        else:
+            all_targets = torch.zeros((0, 5))
+        
+        return mosaic_img, all_targets
+
+# 损失函数定义
+class YOLOLoss(nn.Module):
+    """改进的YOLO损失函数"""
+    def __init__(self, num_classes, anchors, img_size=640, 
+                 lambda_obj=1.0, lambda_noobj=0.5, lambda_cls=0.5, lambda_box=1.0):
+        super().__init__()
+        self.num_classes = num_classes
+        self.img_size = img_size
+        
+        # 损失权重
+        self.lambda_obj = lambda_obj
+        self.lambda_noobj = lambda_noobj
+        self.lambda_cls = lambda_cls
+        self.lambda_box = lambda_box
+        
+        # 转换格式: [s, m, l] x 3 anchors
+        self.register_buffer('anchors', anchors)
+        self.strides = torch.tensor([8, 16, 32])
+        
+        # 定义损失函数
+        self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        self.mse = nn.MSELoss(reduction='none')
+        
+        # 对焦损失 (Focal Loss) 参数
+        self.alpha = 0.25
+        self.gamma = 2.0
+        
+    def forward(self, predictions, targets):
+        """计算损失
+        Args:
+            predictions: 模型输出，格式为3个特征图的列表
+            targets: 目标，格式为[batch_idx, class, x, y, w, h]
+        """
+        device = predictions[0].device
+        batch_size = predictions[0].size(0)
+        
+        # 初始化损失
+        loss_obj = torch.zeros(1, device=device)
+        loss_noobj = torch.zeros(1, device=device)
+        loss_box = torch.zeros(1, device=device)
+        loss_cls = torch.zeros(1, device=device)
+        
+        # 按批次处理targets
+        targets_by_batch = [[] for _ in range(batch_size)]
+        for target_idx in range(len(targets)):
+            batch_idx = 0  # 单个批次的情况
+            if len(targets) > 1:  # 处理多个批次
+                if len(targets.shape) > 1 and targets.shape[1] > 0:
+                    batch_idx = int(targets[target_idx, 0])
+            if batch_idx < batch_size:  # 确保batch_idx有效
+                targets_by_batch[batch_idx].append(targets[target_idx])
+        
+        # 处理每个特征图
+        for level, pred in enumerate(predictions):
+            # 特征图大小
+            bs, _, h, w = pred.shape
+            
+            # 重塑预测结果: [B, 3*(5+C), H, W] -> [B, 3, H, W, 5+C]
+            pred = pred.view(bs, 3, 5 + self.num_classes, h, w)
+            pred = pred.permute(0, 1, 3, 4, 2).contiguous()
+            
+            # 获取当前特征图的anchors和stride
+            anchor_vec = self.anchors[level]
+            stride = self.strides[level]
+            
+            # 创建网格
+            grid_y, grid_x = torch.meshgrid([torch.arange(h, device=device), 
+                                            torch.arange(w, device=device)])
+            grid = torch.stack((grid_x, grid_y), 2).expand(1, 3, h, w, 2).float()
+            
+            # 输出预测的组件
+            pred_xy = torch.sigmoid(pred[..., 0:2])  # 中心点相对网格的偏移 (0-1)
+            pred_wh = torch.exp(pred[..., 2:4]) * anchor_vec.unsqueeze(2).unsqueeze(3)  # 宽高相对anchor的缩放
+            pred_obj = torch.sigmoid(pred[..., 4:5])  # 目标置信度
+            pred_cls = torch.sigmoid(pred[..., 5:])  # 类别概率
+            
+            # 计算预测框绝对坐标 (0-640)
+            pred_boxes = torch.zeros_like(pred[..., :4])
+            pred_boxes[..., 0:2] = (pred_xy + grid) * stride  # 绝对xy
+            pred_boxes[..., 2:4] = pred_wh * stride  # 绝对wh
+            
+            # 处理每个batch
+            for batch_idx in range(batch_size):
+                batch_targets = targets_by_batch[batch_idx]
+                if not batch_targets:  # 如果该batch没有目标
+                    continue
+                
+                targets_tensor = torch.stack(batch_targets)
+                
+                # 提取目标的坐标和类别
+                tcls = targets_tensor[:, 0].long()
+                tx = targets_tensor[:, 1] * self.img_size
+                ty = targets_tensor[:, 2] * self.img_size
+                tw = targets_tensor[:, 3] * self.img_size
+                th = targets_tensor[:, 4] * self.img_size
+                
+                # 过滤掉宽高太小的目标
+                valid = (tw > 1) & (th > 1)
+                if not valid.any():
+                    continue
+                
+                tcls = tcls[valid]
+                tx = tx[valid]
+                ty = ty[valid]
+                tw = tw[valid]
+                th = th[valid]
+                
+                # 将目标转换为当前特征图上的坐标
+                gx = tx / stride
+                gy = ty / stride
+                gw = tw / stride
+                gh = th / stride
+                
+                # 计算网格索引
+                gi = gx.long().clamp(0, w - 1)
+                gj = gy.long().clamp(0, h - 1)
+                
+                # 计算最佳匹配的anchor索引
+                target_boxes = torch.stack([torch.zeros_like(gx), torch.zeros_like(gy), gw, gh], 1)
+                anchor_shapes = torch.cat((torch.zeros(len(anchor_vec), 2), anchor_vec), 1)
+                
+                # 计算IOU以找到最佳anchor
+                anch_ious = box_iou(
+                    xyxy2xywh(target_boxes), 
+                    xyxy2xywh(anchor_shapes)
+                )
+                best_ious, best_n = anch_ious.max(1)
+                
+                # 构建目标张量
+                for t_idx in range(len(tcls)):
+                    c = tcls[t_idx]
+                    i, j = gi[t_idx], gj[t_idx]
+                    a = best_n[t_idx]
+                    
+                    # 目标坐标
+                    gx_t, gy_t = gx[t_idx] - gi[t_idx], gy[t_idx] - gj[t_idx]
+                    gw_t, gh_t = gw[t_idx], gh[t_idx]
+                    
+                    # 目标框中心偏移和宽高
+                    target_xy = torch.tensor([gx_t, gy_t], device=device)
+                    target_wh = torch.tensor([gw_t, gh_t], device=device) / anchor_vec[a]
+                    
+                    # 更新各项损失
+                    # 置信度损失 (对象和非对象)
+                    obj_mask = torch.zeros_like(pred_obj[batch_idx])
+                    obj_mask[a, j, i] = 1
+                    noobj_mask = 1 - obj_mask
+                    
+                    # 对象损失 (置信度)
+                    loss_obj += self.bce(
+                        pred_obj[batch_idx], 
+                        obj_mask
+                    ).sum() * self.lambda_obj
+                    
+                    # 非对象损失 (置信度)
+                    loss_noobj += self.bce(
+                        pred_obj[batch_idx], 
+                        torch.zeros_like(pred_obj[batch_idx])
+                    ).sum() * self.lambda_noobj * noobj_mask
+                    
+                    # 框坐标损失
+                    pred_xy_t = pred_xy[batch_idx, a, j, i]
+                    loss_xy = self.mse(pred_xy_t, target_xy).sum() * self.lambda_box
+                    
+                    # 转换为对数空间计算宽高损失
+                    pred_wh_t = torch.log(pred_wh[batch_idx, a, j, i] / anchor_vec[a] + 1e-6)
+                    target_wh = torch.log(target_wh + 1e-6)
+                    loss_wh = self.mse(pred_wh_t, target_wh).sum() * self.lambda_box
+                    
+                    loss_box += loss_xy + loss_wh
+                    
+                    # 类别损失
+                    if self.num_classes > 1:  # 多类别情况
+                        target_cls = torch.zeros_like(pred_cls[batch_idx, a, j, i])
+                        target_cls[c] = 1
+                        loss_cls += self.focal_loss(
+                            pred_cls[batch_idx, a, j, i], 
+                            target_cls
+                        ).sum() * self.lambda_cls
+        
+        # 归一化损失
+        num_targets = sum(len(t) for t in targets_by_batch) + 1e-6  # 防止除零
+        loss_box /= num_targets
+        loss_obj /= num_targets
+        loss_noobj /= batch_size * 3 * h * w  # 归一化非对象损失
+        loss_cls /= num_targets
+        
+        # 总损失
+        total_loss = loss_box + loss_obj + loss_noobj + loss_cls
+        
+        # 返回各项损失
+        return total_loss, {
+            'box': loss_box.item(),
+            'obj': loss_obj.item(),
+            'noobj': loss_noobj.item(),
+            'cls': loss_cls.item(),
+            'total': total_loss.item()
+        }
+    
+    def focal_loss(self, pred, target):
+        """焦点损失"""
+        # 二值交叉熵
+        bce = self.bce(pred, target)
+        
+        # 计算pt
+        pt = torch.exp(-bce)
+        # 计算焦点损失
+        alpha_t = target * self.alpha + (1 - target) * (1 - self.alpha)
+        focal_loss = alpha_t * (1 - pt) ** self.gamma * bce
+        
+        return focal_loss
+
+# 训练函数
+def train(cfg):
+    """训练主函数"""
+    setup_seed(cfg.seed)
+    logger = setup_logging(os.path.join(LOGS_DIR, "train.log"))
+    
+    # 获取类别
+    classes = get_classes(cfg.data_root)
+    num_classes = len(classes)
+    logger.info(f"类别数: {num_classes}, 类别: {classes}")
+    
+    # 数据增强
+    train_transform = transforms.Compose([
+        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomRotation(10),
+    ])
+    
+    # 创建数据集
+    train_dataset = InsectsDataset(
+        cfg.data_root, cfg.img_size, 'train', train_transform
+    )
+    val_dataset = InsectsDataset(
+        cfg.data_root, cfg.img_size, 'val', None
     )
     
-    # 执行验证
-    map_score = validator.validate()
+    # 创建数据加载器
+    train_loader = DataLoader(
+        train_dataset, batch_size=cfg.batch_size, shuffle=True,
+        num_workers=cfg.num_workers, pin_memory=True,
+        collate_fn=collate_fn
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=cfg.batch_size, shuffle=False,
+        num_workers=cfg.num_workers, pin_memory=True,
+        collate_fn=collate_fn
+    )
     
-    logging.info(f"验证完成，mAP@{IOU_THRESH}: {map_score:.4f}")
+    # 创建模型
+    model = YOLOv10(num_classes=num_classes, img_size=cfg.img_size)
+    model.cuda()
+    
+    # 记录模型信息
+    pytorch_total_params = sum(p.numel() for p in model.parameters())
+    logger.info(f"模型参数量: {pytorch_total_params / 1e6:.2f}M")
+    
+    # 创建损失函数
+    criterion = YOLOLoss(
+        num_classes=num_classes,
+        anchors=model.anchors,
+        img_size=cfg.img_size,
+        lambda_obj=cfg.lambda_obj,
+        lambda
 
-if __name__ == "__main__":
-    main()
+找到具有 3 个许可证类型的类似代码
