@@ -1,6 +1,0 @@
-2025-05-24 13:57:39,255 - INFO - 数据目录: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\data\insects
-2025-05-24 13:57:39,256 - INFO - 输出目录: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\frcnn_code
-2025-05-24 13:57:39,256 - INFO - 系统平台: Windows
-2025-05-24 13:57:39,286 - INFO - GPU可用性: True, 数量: 1, 名称: ['NVIDIA GeForce RTX 2050']
-2025-05-24 13:57:45,616 - INFO - 类别统计: Counter({'Leconte': 2810, 'coleoptera': 2277, 'armandi': 1996, 'Boerner': 1913, 'acuminatus': 1188, 'Linnaeus': 1110, 'linnaeus': 909})
-2025-05-24 13:57:45,616 - INFO - 数据准备完成!
