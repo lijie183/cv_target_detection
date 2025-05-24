@@ -247,7 +247,7 @@ def visualize_predictions(model, images_dir, annotations_dir, class_names, outpu
             output_path = Path(output_dir) / f"pred_vs_true_{base_name}.png"
             try:
                 plt.savefig(output_path, dpi=300)
-                print(f"已保存预测可视化: {output_path}")
+                print(f"已保存评估预测可视化: {output_path}")
             except Exception as e:
                 print(f"保存图像失败 {output_path}: {e}")
             
@@ -310,6 +310,26 @@ def find_model_in_train_dir(base_dir, train_dir_name):
     
     return None
 
+def find_latest_train_dir(results_dir):
+    """查找数字最大的train目录"""
+    train_dirs = []
+    for d in results_dir.glob("train*"):
+        if d.is_dir():
+            # 提取目录名中的数字
+            try:
+                # 提取目录名中的数字部分 (如 'train11' -> 11)
+                num = int(d.name.replace('train', '')) if d.name != 'train' else 0
+                train_dirs.append((num, d))
+            except ValueError:
+                # 如果目录名不符合'trainX'格式，则忽略
+                continue
+    
+    # 按数字大小排序，取最大的
+    if train_dirs:
+        train_dirs.sort(key=lambda x: x[0], reverse=True)
+        return train_dirs[0][1]  # 返回目录路径
+    return None
+
 def main():
     args = parse_args()
     
@@ -325,7 +345,19 @@ def main():
     plots_dir = results_dir / "plots"
     metrics_dir = results_dir / "metrics"
     logs_dir = results_dir / "logs"
-    predictions_dir = results_dir / "predictions"
+    
+    # 创建预测目录
+    predictions_base_dir = results_dir / "predictions"
+    # 创建evaluate子目录
+    evaluate_dir = predictions_base_dir / "evaluate"
+    evaluate_dir.mkdir(exist_ok=True, parents=True)
+    # 创建带时间戳的评估子目录
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    current_eval_dir = evaluate_dir / timestamp
+    current_eval_dir.mkdir(exist_ok=True, parents=True)
+
+    # 使用新的输出目录
+    predictions_dir = current_eval_dir  # 将当前预测输出指向带时间戳的子目录
     
     # 确保目录存在
     for directory in [metrics_dir, plots_dir, logs_dir, predictions_dir]:
@@ -366,52 +398,36 @@ def main():
     # 加载模型 - 修改模型加载逻辑
     model_path = None
     
-    # 0. 直接尝试指定的固定路径（因为你在错误信息中提到了这个路径）
-    hardcoded_path = yolo_dir / "results" / "train6" / "weights" / "best.pt"
-    if hardcoded_path.exists():
-        model_path = hardcoded_path
-        logger.info(f"使用硬编码路径中的模型: {model_path}")
-    
-    # 1. 如果命令行指定了训练目录，则优先使用
+    # 1. 首先在models目录查找最佳模型
+    models_best = models_dir / "best_model.pt"
+    if models_best.exists():
+        model_path = models_best
+        logger.info(f"使用models目录中的模型: {model_path}")
+
+    # 2. 如果没有找到，尝试查找数字最大的train目录中的最佳模型
+    if not model_path:
+        latest_train_dir = find_latest_train_dir(results_dir)
+        if latest_train_dir:
+            best_model_path = latest_train_dir / "weights" / "best.pt"
+            if best_model_path.exists():
+                model_path = best_model_path
+                logger.info(f"使用最新训练目录({latest_train_dir.name})中的模型: {model_path}")
+            else:
+                # 尝试last.pt
+                last_model_path = latest_train_dir / "weights" / "last.pt"
+                if last_model_path.exists():
+                    model_path = last_model_path
+                    logger.info(f"使用最新训练目录({latest_train_dir.name})中的最后模型: {model_path}")
+
+    # 3. 如果还是没有找到，尝试命令行指定的模型
     if not model_path and args.train_dir:
         train_dir_path = results_dir / args.train_dir
         train_model_path = find_model_in_train_dir(train_dir_path, "")
         if train_model_path:
             model_path = train_model_path
             logger.info(f"使用指定训练目录中的模型: {model_path}")
-    
-    # 2. 如果没有找到模型，尝试查找models目录中的指定模型
-    if not model_path:
-        model_path_arg = models_dir / args.model
-        if model_path_arg.exists():
-            model_path = model_path_arg
-            logger.info(f"使用models目录中的模型: {model_path}")
-    
-    # 3. 如果还是没有找到，尝试查找train7目录中的模型
-    if not model_path:
-        specific_model_path = yolo_dir / "results" / "train7" / "weights" / "best.pt"
-        if specific_model_path.exists():
-            model_path = specific_model_path
-            logger.info(f"使用train7目录中的模型: {model_path}")
-    
-    # 4. 如果还是没有找到，尝试查找train6目录中的模型
-    if not model_path:
-        specific_model_path = yolo_dir / "results" / "train6" / "weights" / "best.pt"
-        if specific_model_path.exists():
-            model_path = specific_model_path
-            logger.info(f"使用train6目录中的模型: {model_path}")
-    
-    # 5. 如果还是没有找到，尝试在results目录中查找任何训练目录中的模型
-    if not model_path:
-        train_dirs = list(results_dir.glob("train*"))
-        for train_dir in sorted(train_dirs, key=os.path.getmtime, reverse=True):
-            train_model_path = find_model_in_train_dir(train_dir, "")
-            if train_model_path:
-                model_path = train_model_path
-                logger.info(f"使用最新训练目录中的模型: {model_path}")
-                break
                 
-    # 6. 最后尝试查找整个目录中的任何.pt文件
+    # 4. 如果还是没有找到，尝试查找整个目录中的任何.pt文件
     if not model_path:
         latest_model = find_latest_model(yolo_dir)
         if latest_model:
@@ -455,24 +471,49 @@ def main():
         # 保存评估指标
         metrics_file = metrics_dir / "metrics.json"
         try:
+            # 修改为:
             metrics_data = {
                 'mAP50': float(metrics.map50),
-                'mAP50-95': float(metrics.map),
-                'precision': float(metrics.p),
-                'recall': float(metrics.r),
-                'f1-score': 2 * (float(metrics.p) * float(metrics.r)) / (float(metrics.p) + float(metrics.r) + 1e-8),
+                'mAP50-95': float(metrics.map)
             }
+            # 处理精确率和召回率，它们可能是数组
+            if hasattr(metrics.p, 'mean'):
+                metrics_data['precision'] = float(metrics.p.mean())
+                metrics_data['recall'] = float(metrics.r.mean())
+                # 使用平均值计算F1
+                metrics_data['f1-score'] = 2 * metrics_data['precision'] * metrics_data['recall'] / (metrics_data['precision'] + metrics_data['recall'] + 1e-8)
+            else:
+                # 尝试直接转换
+                try:
+                    metrics_data['precision'] = float(metrics.p)
+                    metrics_data['recall'] = float(metrics.r)
+                    metrics_data['f1-score'] = 2 * metrics_data['precision'] * metrics_data['recall'] / (metrics_data['precision'] + metrics_data['recall'] + 1e-8)
+                except:
+                    logger.warning("无法转换精确率/召回率为标量，可能是数组格式")
+                    metrics_data['precision'] = float(np.mean(metrics.p)) if isinstance(metrics.p, np.ndarray) else 0
+                    metrics_data['recall'] = float(np.mean(metrics.r)) if isinstance(metrics.r, np.ndarray) else 0
+                    metrics_data['f1-score'] = 2 * metrics_data['precision'] * metrics_data['recall'] / (metrics_data['precision'] + metrics_data['recall'] + 1e-8)
             
             # 添加每个类别的指标
             class_metrics = {}
             for i, name in enumerate(class_names):
                 if i < len(metrics.ap50):
-                    class_metrics[name] = {
-                        'precision': float(metrics.p_per_class[i] if i < len(metrics.p_per_class) else 0),
-                        'recall': float(metrics.r_per_class[i] if i < len(metrics.r_per_class) else 0),
-                        'ap50': float(metrics.ap50[i]),
-                        'ap': float(metrics.ap[i]) if i < len(metrics.ap) else 0,
-                    }
+                    try:
+                        class_metrics[name] = {
+                            'precision': float(metrics.p_per_class[i]) if i < len(metrics.p_per_class) else 0,
+                            'recall': float(metrics.r_per_class[i]) if i < len(metrics.r_per_class) else 0,
+                            'ap50': float(metrics.ap50[i]),
+                            'ap': float(metrics.ap[i]) if i < len(metrics.ap) else 0,
+                        }
+                    except TypeError:
+                        # 处理无法转换为标量的情况
+                        logger.warning(f"类别 {name} 的指标无法转换为标量，使用默认值")
+                        class_metrics[name] = {
+                            'precision': 0.0,
+                            'recall': 0.0,
+                            'ap50': float(metrics.ap50[i]),
+                            'ap': float(metrics.ap[i]) if i < len(metrics.ap) else 0,
+                        }
             
             metrics_data['class_metrics'] = class_metrics
             
@@ -528,6 +569,7 @@ def main():
             
             if success:
                 logger.info(f"预测可视化已保存至: {predictions_dir}")
+                logger.info(f"时间戳目录: {timestamp}")
             else:
                 logger.warning("预测可视化生成失败")
         else:

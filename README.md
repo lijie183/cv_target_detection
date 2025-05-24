@@ -3343,3 +3343,104 @@ def train(cfg):
         lambda
 
 找到具有 3 个许可证类型的类似代码
+
+
+
+ot support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  19%|█▉        | 6/31 [00:00<00:02,  8.77it/s]WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  26%|██▌       | 8/31 [00:00<00:02, 10.24it/s]WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  32%|███▏      | 10/31 [00:01<00:01, 11.50it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  39%|███▊      | 12/31 [00:01<00:01, 12.07it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  45%|████▌     | 14/31 [00:01<00:01, 12.47it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  52%|█████▏    | 16/31 [00:01<00:01, 12.79it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  58%|█████▊    | 18/31 [00:01<00:01, 12.92it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  65%|██████▍   | 20/31 [00:01<00:00, 12.78it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  71%|███████   | 22/31 [00:01<00:00, 13.21it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  77%|███████▋  | 24/31 [00:02<00:00, 13.41it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  84%|████████▍ | 26/31 [00:02<00:00, 13.47it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  90%|█████████ | 28/31 [00:02<00:00, 13.18it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+WARNING Model does not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95):  97%|█████████▋| 30/31 [00:02<00:00, 13.10it/s]WARNING Model does 
+not support 'augment=True', reverting to single-scale prediction.
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100%|██████████| 31/31 [00:02<00:00, 11.72it/s]
+                   all        245       1856      0.808      0.789      0.851      0.656
+
+
+
+03：
+2025-05-24 11:44:36,714 - INFO - 开始评估模型
+Ultralytics 8.3.126  Python-3.11.0 torch-2.7.0+cu128 CUDA:0 (NVIDIA GeForce RTX 2050, 4096MiB)
+YOLOv10n summary (fused): 102 layers, 2,266,533 parameters, 0 gradients, 6.5 GFLOPs
+val: Fast image access  (ping: 0.10.0 ms, read: 427.7106.4 MB/s, size: 476.4 KB)
+val: Scanning C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\data\labels\val.cache... 245 images, 
+                 Class     Images  Instances      Box(P          R      mAP50  mAP50-95): 100%|██████████| 16/16 [00:06<00:00,  2.53it/s]
+                   all        245       1856      0.811      0.786      0.829      0.652
+               Boerner        201        318      0.891      0.931      0.949      0.819
+               Leconte        194        594       0.93      0.909      0.946      0.737
+              Linnaeus        243        292      0.807       0.63      0.752      0.627
+            acuminatus        235        235      0.931      0.672      0.821      0.642
+               armandi        219        231       0.71      0.668      0.715      0.566
+            coleoptera        181        186      0.595      0.909      0.792      0.524
+Speed: 1.5ms preprocess, 10.3ms inference, 0.0ms loss, 0.3ms postprocess per image
+Saving C:\Users\lijie\Desktop\\CV-work\ \2-\cv-target-detect\yolo_code\results\metrics\evaluation4\predictions.json...
+Results saved to C:\Users\lijie\Desktop\\CV-work\ \2-\cv-target-detect\yolo_code\results\metrics\evaluation4
+2025-05-24 11:45:17,880 - INFO - 评估完成
+2025-05-24 11:45:17,881 - ERROR - 保存指标失败: only length-1 arrays can be converted to Python scalars
+2025-05-24 11:45:17,881 - ERROR - Traceback (most recent call last):
+  File "c:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\scripts\03_evaluate_model.py", line 461, in 
+main
+    'precision': float(metrics.p),
+                 ^^^^^^^^^^^^^^^^
+TypeError: only length-1 arrays can be converted to Python scalars
+
+2025-05-24 11:45:17,882 - INFO - 复制评估图表: confusion_matrix.png
+2025-05-24 11:45:17,885 - INFO - 复制评估图表: confusion_matrix_normalized.png
+2025-05-24 11:45:17,887 - INFO - 复制评估图表: F1_curve.png
+2025-05-24 11:45:17,889 - INFO - 复制评估图表: PR_curve.png
+2025-05-24 11:45:17,891 - INFO - 复制评估图表: P_curve.png
+2025-05-24 11:45:17,893 - INFO - 复制评估图表: R_curve.png
+2025-05-24 11:45:17,894 - INFO - 可视化预测结果
+
+image 1/1 C:\Users\lijie\Desktop\\CV-work\ \2-\cv-target-detect\yolo_code\data\images\val\2490.jpeg: 640x640 5 Lecontes, 1 Linnaeus, 2 acuminatuss, 1 armandi, 2 coleopteras, 33.7ms
+Speed: 4.7ms preprocess, 33.7ms inference, 1.5ms postprocess per image at shape (1, 3, 640, 640)
+已保存预测可视化: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\results\predictions\pred_vs_true_2490.png
+
+image 1/1 C:\Users\lijie\Desktop\\CV-work\ \2-\cv-target-detect\yolo_code\data\images\val\1992.jpeg: 640x640 1 Boerner, 2 Lecontes, 2 Linnaeuss, 1 coleoptera, 1 linnaeus, 33.9ms
+Speed: 4.3ms preprocess, 33.9ms inference, 1.1ms postprocess per image at shape (1, 3, 640, 640)
+已保存预测可视化: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\results\predictions\pred_vs_true_1992.png
+
+image 1/1 C:\Users\lijie\Desktop\\CV-work\ \2-\cv-target-detect\yolo_code\data\images\val\3134.jpeg: 640x640 3 Boerners, 2 Linnaeuss, 1 acuminatus, 2 armandis, 2 coleopteras, 72.2ms
+Speed: 6.4ms preprocess, 72.2ms inference, 1.1ms postprocess per image at shape (1, 3, 640, 640)
+已保存预测可视化: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\results\predictions\pred_vs_true_3134.png
+
+image 1/1 C:\Users\lijie\Desktop\\CV-work\ \2-\cv-target-detect\yolo_code\data\images\val\3159.jpeg: 640x640 3 Boerners, 1 Linnaeus, 1 acuminatus, 1 armandi, 2 coleopteras, 144.5ms
+Speed: 9.4ms preprocess, 144.5ms inference, 1.2ms postprocess per image at shape (1, 3, 640, 640)
+已保存预测可视化: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\results\predictions\pred_vs_true_3159.png
+
+image 1/1 C:\Users\lijie\Desktop\\CV-work\ \2-\cv-target-detect\yolo_code\data\images\val\2237.jpeg: 640x640 1 Boerner, 3 Lecontes, 1 Linnaeus, 1 acuminatus, 1 armandi, 1 coleoptera, 12.3ms
+Speed: 3.5ms preprocess, 12.3ms inference, 0.7ms postprocess per image at shape (1, 3, 640, 640)
+已保存预测可视化: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\results\predictions\pred_vs_true_2237.png
+2025-05-24 11:45:24,041 - INFO - 预测可视化已保存至: C:\Users\lijie\Desktop\大三下资料\CV-work\上机课 四个实验报告\实验2-目标检测\cv-target-detect\yolo_code\results\predictions
+2025-05-24 11:45:24,041 - INFO - 评估完成，所有结果已保存
