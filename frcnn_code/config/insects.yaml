@@ -1,0 +1,17 @@
+class_counts:
+  Boerner: 1913
+  Leconte: 2810
+  Linnaeus: 1110
+  acuminatus: 1188
+  armandi: 1996
+  coleoptera: 2277
+  linnaeus: 909
+names:
+- Boerner
+- Leconte
+- Linnaeus
+- acuminatus
+- armandi
+- coleoptera
+- linnaeus
+num_classes: 8
